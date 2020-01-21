@@ -170,6 +170,7 @@
     <ClInclude Include="display_utils.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="log_utils.h" />
+    <ClInclude Include="model.h" />
     <ClInclude Include="msbsla.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />

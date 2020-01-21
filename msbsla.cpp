@@ -2,14 +2,16 @@
 
 #include "framework.h"
 
-#include "log_utils.h"
 #include "display_utils.h"
+#include "log_utils.h"
+#include "model.h"
 
 #include <wil/resource.h>
 
 #include <CommCtrl.h>
 
 #include <filesystem>
+#include <memory>
 
 
 namespace fs = std::filesystem;
@@ -24,6 +26,8 @@ namespace fs = std::filesystem;
 // Local data
 static HWND g_hDlg { nullptr };
 static HWND g_hLBLogList { nullptr };
+
+std::unique_ptr<raw_data> g_spModel { nullptr };
 
 
 // Local functions
@@ -54,26 +58,6 @@ static void populate_log_list(wchar_t const* log_dir, HWND list_box)
                 auto p { new fs::directory_entry { file_path } };
                 ::SendMessageW(list_box, LB_SETITEMDATA, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(p));
             }
-            // wil::unique_hfile f { ::CreateFileW(file_path.path().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-            //                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
-            // THROW_LAST_ERROR_IF(!f.is_valid());
-            //// Skip first 2 bytes
-            //::SetFilePointer(f.get(), 2, nullptr, FILE_BEGIN);
-
-            // uint64_t timestamp {};
-            // DWORD bytes_read {};
-            //::ReadFile(f.get(), reinterpret_cast<char*>(&timestamp), sizeof(timestamp), &bytes_read, nullptr);
-            // FILETIME const ft { .dwLowDateTime = static_cast<DWORD>(timestamp),
-            //                    .dwHighDateTime = static_cast<DWORD>(timestamp >> 32) };
-            // SYSTEMTIME st {};
-            //::FileTimeToSystemTime(&ft, &st);
-
-            // std::wcout << file_path.path().filename() << L":\n";
-            // std::wcout << L"  Start: " << std::setfill(L'0') << std::setw(4) << st.wYear << L"-" <<
-            // std::setfill(L'0')
-            //           << std::setw(2) << st.wMonth << L"-" << std::setfill(L'0') << std::setw(2) << st.wDay << L" "
-            //           << std::setfill(L'0') << std::setw(2) << st.wHour << L":" << std::setfill(L'0') << std::setw(2)
-            //           << st.wMinute << L":" << std::setfill(L'0') << std::setw(2) << st.wSecond << std::endl;
         }
     }
 }
@@ -128,13 +112,38 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
             {
             case LBN_SELCHANGE: {
                 ::update_sel_log_timestamp(g_hDlg);
-                break;
+                return TRUE;
             }
 
             default:
                 break;
             }
         }
+
+        case IDC_BUTTON_LOAD_LOG: {
+            switch (HIWORD(wParam))
+            {
+            case BN_CLICKED: {
+                auto const lb_logs { ::GetDlgItem(hwndDlg, IDC_LB_LOGS) };
+                auto const sel_index { static_cast<intptr_t>(::SendMessageW(lb_logs, LB_GETCURSEL, 0, 0)) };
+                if (sel_index >= 0)
+                {
+                    auto const& dir_entry { *reinterpret_cast<fs::directory_entry const*>(
+                        ::SendMessageW(lb_logs, LB_GETITEMDATA, sel_index, 0)) };
+
+                    g_spModel.reset(new raw_data(dir_entry.path().c_str()));
+                    auto const dummy_len { g_spModel->directory().size() };
+                    auto const dummy { dummy_len };
+                }
+                // TODO: Implementation
+                return TRUE;
+            }
+
+            default:
+                break;
+            }
+        }
+
         default:
             break;
         }
