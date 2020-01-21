@@ -10,6 +10,8 @@
 
 #include <CommCtrl.h>
 
+#include <cassert>
+#include <wchar.h>
 #include <filesystem>
 #include <memory>
 
@@ -101,6 +103,15 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         g_hLBLogList = ::GetDlgItem(hwndDlg, IDC_LB_LOGS);
         // TODO: Query user for log folder
         populate_log_list(log_location, ::GetDlgItem(hwndDlg, IDC_LB_LOGS));
+
+        // Set column(s) for the packet list view
+        auto lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
+        LV_COLUMNW col {};
+        col.mask = LVCF_WIDTH | LVCF_TEXT;
+        col.cx = 50;
+        col.pszText = const_cast<wchar_t*>(L"Index");
+        ListView_InsertColumn(lv_packets, 0, &col);
+
         return TRUE;
     }
 
@@ -132,10 +143,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                         ::SendMessageW(lb_logs, LB_GETITEMDATA, sel_index, 0)) };
 
                     g_spModel.reset(new raw_data(dir_entry.path().c_str()));
-                    auto const dummy_len { g_spModel->directory().size() };
-                    auto const dummy { dummy_len };
+                    auto const packet_count { g_spModel->directory().size() };
+
+                    // Set virtual list view size
+                    auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
+                    ::SendMessageW(lv_packets, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count),
+                                   LVSICF_NOINVALIDATEALL);
                 }
-                // TODO: Implementation
                 return TRUE;
             }
 
@@ -148,6 +162,28 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
             break;
         }
         break;
+    }
+
+    case WM_NOTIFY: {
+        auto const& nmhdr { *reinterpret_cast<NMHDR const*>(lParam) };
+        if (nmhdr.idFrom == IDC_LISTVIEW_PACKET_LIST && nmhdr.code == LVN_GETDISPINFOW)
+        {
+            auto& nmlvdi { *reinterpret_cast<NMLVDISPINFOW*>(lParam) };
+            if (nmlvdi.item.mask & LVIF_TEXT)
+            {
+                auto const index_str { ::std::to_wstring(nmlvdi.item.iItem + 1) };
+                ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, index_str.c_str(), index_str.size());
+                nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                return TRUE;
+            }
+        }
+        return FALSE;
+    }
+
+    case WM_GETMINMAXINFO: {
+        auto& info { *reinterpret_cast<MINMAXINFO*>(lParam) };
+        info.ptMinTrackSize = POINT { 1200, 800 };
+        return TRUE;
     }
 
     case WM_CLOSE: {
