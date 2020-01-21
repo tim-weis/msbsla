@@ -6,13 +6,19 @@
 #include <vector>
 
 
+namespace
+{
+static constexpr auto const k_header_size { 2 };
+}
+
+
 struct data_proxy
 {
     data_proxy() = delete;
     data_proxy(unsigned char const* begin, unsigned char const* end) : begin_ { begin }, end_ { end } {}
     data_proxy(data_proxy const&) = default;
 
-    auto size() const noexcept { return ::std::distance(begin_, end_); }
+    auto size() const noexcept { return ::std::distance(begin_, end_) - k_header_size; }
     auto data() const noexcept { return begin_; };
     auto type() const noexcept { return *begin_; }
 

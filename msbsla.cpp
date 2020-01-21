@@ -11,9 +11,9 @@
 #include <CommCtrl.h>
 
 #include <cassert>
-#include <wchar.h>
 #include <filesystem>
 #include <memory>
+#include <wchar.h>
 
 
 namespace fs = std::filesystem;
@@ -24,6 +24,14 @@ namespace fs = std::filesystem;
                          name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
                          processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
+// Types
+enum class packet_col
+{
+    index,
+    type,
+    size,
+    payload
+};
 
 // Local data
 static HWND g_hDlg { nullptr };
@@ -108,9 +116,21 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         auto lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
         LV_COLUMNW col {};
         col.mask = LVCF_WIDTH | LVCF_TEXT;
-        col.cx = 50;
+        col.cx = 70;
         col.pszText = const_cast<wchar_t*>(L"Index");
         ListView_InsertColumn(lv_packets, 0, &col);
+
+        col.cx = 50;
+        col.pszText = const_cast<wchar_t*>(L"Type");
+        ListView_InsertColumn(lv_packets, packet_col::type, &col);
+
+        col.cx = 50;
+        col.pszText = const_cast<wchar_t*>(L"Size");
+        ListView_InsertColumn(lv_packets, packet_col::size, &col);
+
+        col.cx = 400;
+        col.pszText = const_cast<wchar_t*>(L"Payload");
+        ListView_InsertColumn(lv_packets, packet_col::payload, &col);
 
         return TRUE;
     }
@@ -171,9 +191,43 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
             auto& nmlvdi { *reinterpret_cast<NMLVDISPINFOW*>(lParam) };
             if (nmlvdi.item.mask & LVIF_TEXT)
             {
-                auto const index_str { ::std::to_wstring(nmlvdi.item.iItem + 1) };
-                ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, index_str.c_str(), index_str.size());
-                nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                auto const item_index { nmlvdi.item.iItem };
+
+                auto col_index { static_cast<packet_col>(nmlvdi.item.iSubItem) };
+                switch (col_index)
+                {
+                case packet_col::index: {
+                    auto const index_str { ::std::to_wstring(item_index + 1) };
+                    ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, index_str.c_str(), index_str.size());
+                    nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                }
+                break;
+
+                case packet_col::type: {
+                    auto const type_str { ::to_hex_string(g_spModel->directory()[item_index].type()) };
+                    ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, type_str.c_str(), type_str.size());
+                    nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                }
+                break;
+
+                case packet_col::size: {
+                    auto const size_str { ::std::to_wstring(g_spModel->directory()[item_index].size()) };
+                    ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, size_str.c_str(), size_str.size());
+                    nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                }
+                break;
+
+                case packet_col::payload: {
+                    auto const payload_str { ::to_hex_string(g_spModel->directory()[item_index].data() + 2,
+                                                             g_spModel->directory()[item_index].size()) };
+                    ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, payload_str.c_str(), payload_str.size());
+                    nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                }
+                break;
+
+                default:
+                    break;
+                }
                 return TRUE;
             }
         }
