@@ -5,6 +5,7 @@
 #include "display_utils.h"
 #include "log_utils.h"
 #include "model.h"
+#include "utils.h"
 
 #include <wil/resource.h>
 
@@ -93,6 +94,94 @@ static void update_sel_log_timestamp(HWND hDlg)
 }
 
 
+static RECT window_rect_in_client_coords(HWND dlg_handle, int control_id)
+{
+    auto const control_handle { ::GetDlgItem(dlg_handle, control_id) };
+    assert(control_handle != nullptr);
+    RECT window_rect {};
+    THROW_IF_WIN32_BOOL_FALSE(::GetWindowRect(control_handle, &window_rect));
+    THROW_IF_WIN32_BOOL_FALSE(::ScreenToClient(dlg_handle, reinterpret_cast<POINT*>(&window_rect)));
+    THROW_IF_WIN32_BOOL_FALSE(::ScreenToClient(dlg_handle, reinterpret_cast<POINT*>(&window_rect) + 1));
+    return window_rect;
+}
+
+
+static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t height_client)
+{
+    // Calculate outer dialog margins (7 DLU's on either side)
+    RECT rect_tmp { .left = 7, .top = 7, .right = 7, .bottom = 7 };
+    THROW_IF_WIN32_BOOL_FALSE(::MapDialogRect(dlg_handle, &rect_tmp));
+    auto const margin_x { rect_tmp.right };
+    auto const margin_y { rect_tmp.bottom };
+    // Calculate vertical spacing between related controls (e.g. label and listbox)
+    rect_tmp = RECT { .top = 3 };
+    THROW_IF_WIN32_BOOL_FALSE(::MapDialogRect(dlg_handle, &rect_tmp));
+    auto const space_y_related { rect_tmp.top };
+    // Calculate vertical spacing between unrelated controls
+    rect_tmp = RECT { .top = 7 };
+    THROW_IF_WIN32_BOOL_FALSE(::MapDialogRect(dlg_handle, &rect_tmp));
+    auto const space_y_unrelated { rect_tmp.top };
+
+    // Position sensor log list label
+    // Top: margin_y
+    // Left: margin_x
+    // Width: from resource script
+    // Height: from resource script
+    RECT rc_logs_label { ::window_rect_in_client_coords(dlg_handle, IDC_STATIC_SENSOR_LOG_LIST_LABEL) };
+    ::OffsetRect(&rc_logs_label, margin_x - rc_logs_label.left, margin_y - rc_logs_label.top);
+    auto const logs_label_handle { ::GetDlgItem(dlg_handle, IDC_STATIC_SENSOR_LOG_LIST_LABEL) };
+    ::SetWindowPos(logs_label_handle, nullptr, rc_logs_label.left, rc_logs_label.top, 0, 0,
+                   SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position sensor log list
+    // Top: Label's bottom + space_y_related
+    // Left: margin_x
+    // Width: constant
+    // Height: constant
+    static constexpr auto const log_list_width { 580 };
+    static constexpr auto const log_list_height { 320 };
+    RECT rc_logs { .left = 0, .top = 0, .right = log_list_width, .bottom = log_list_height };
+    ::OffsetRect(&rc_logs, rc_logs_label.left, rc_logs_label.bottom + space_y_related);
+    auto const logs_handle { ::GetDlgItem(dlg_handle, IDC_LB_LOGS) };
+    ::SetWindowPos(logs_handle, nullptr, rc_logs.left, rc_logs.top, ::width(rc_logs), ::height(rc_logs),
+                   SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position sensor log information label
+    auto rc_log_ts_label { ::window_rect_in_client_coords(dlg_handle, IDC_STATIC_SENSOR_LOG_TIMESTAMP_LABEL) };
+    ::OffsetRect(&rc_log_ts_label, rc_logs.right + margin_y - rc_log_ts_label.left, rc_logs.top - rc_log_ts_label.top);
+    auto const log_ts_label_handle { ::GetDlgItem(dlg_handle, IDC_STATIC_SENSOR_LOG_TIMESTAMP_LABEL) };
+    ::SetWindowPos(log_ts_label_handle, nullptr, rc_log_ts_label.left, rc_log_ts_label.top, ::width(rc_log_ts_label),
+                   ::height(rc_log_ts_label), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position sensor log timestamp
+    auto rc_log_ts { ::window_rect_in_client_coords(dlg_handle, IDC_STATIC_TIMESTAMP) };
+    ::OffsetRect(&rc_log_ts, rc_log_ts_label.left - rc_log_ts.left,
+                 rc_log_ts_label.bottom + space_y_related - rc_log_ts.top);
+    auto const log_ts_handle { ::GetDlgItem(dlg_handle, IDC_STATIC_TIMESTAMP) };
+    ::SetWindowPos(log_ts_handle, nullptr, rc_log_ts.left, rc_log_ts.top, ::width(rc_log_ts), ::height(rc_log_ts),
+                   SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position "Load" button
+    auto rc_load { ::window_rect_in_client_coords(dlg_handle, IDC_BUTTON_LOAD_LOG) };
+    ::OffsetRect(&rc_load, rc_log_ts_label.left - rc_load.left, rc_logs.bottom - rc_load.bottom);
+    auto const load_handle { ::GetDlgItem(dlg_handle, IDC_BUTTON_LOAD_LOG) };
+    ::SetWindowPos(load_handle, nullptr, rc_load.left, rc_load.top, ::width(rc_load), ::height(rc_load),
+                   SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position packet list
+    // Top: log_list's bottom + space_y_unrelated
+    // Left: margin_x
+    // Width: full client width (minus 2 * margin_x)
+    // Height: all the way down to the bottom (minus margin_y)
+    RECT rc_packets { .left = margin_x,
+                      .top = rc_logs.bottom + space_y_unrelated,
+                      .right = width_client - margin_x,
+                      .bottom = height_client - margin_y };
+    ::SetWindowPos(::GetDlgItem(dlg_handle, IDC_LISTVIEW_PACKET_LIST), nullptr, rc_packets.left, rc_packets.top,
+                   ::width(rc_packets), ::height(rc_packets), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+}
+
+
 // TEMP --- VVV
 // My local sensor log capture store; needs to be replaced with a folder selection dialog
 auto const& log_location {
@@ -135,6 +224,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         return TRUE;
     }
 
+    case WM_SIZE: {
+        uint32_t const width_client { LOWORD(lParam) };
+        uint32_t const height_client { HIWORD(lParam) };
+        arrange_controls(hwndDlg, width_client, height_client);
+        return TRUE;
+    }
+
     case WM_COMMAND: {
         switch (LOWORD(wParam))
         {
@@ -168,7 +264,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                     // Set virtual list view size
                     auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
                     ::SendMessageW(lv_packets, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count),
-                                   LVSICF_NOINVALIDATEALL);
+                                   0x0);
                 }
                 return TRUE;
             }
