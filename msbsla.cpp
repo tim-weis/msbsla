@@ -207,19 +207,21 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         col.mask = LVCF_WIDTH | LVCF_TEXT;
         col.cx = 70;
         col.pszText = const_cast<wchar_t*>(L"Index");
-        ListView_InsertColumn(lv_packets, 0, &col);
+        ListView_InsertColumn(lv_packets, packet_col::index, &col);
 
-        col.cx = 50;
+        col.mask &= ~LVCF_WIDTH;
         col.pszText = const_cast<wchar_t*>(L"Type");
         ListView_InsertColumn(lv_packets, packet_col::type, &col);
 
-        col.cx = 50;
+        col.mask |= LVCF_FMT;
+        col.fmt = LVCFMT_RIGHT;
         col.pszText = const_cast<wchar_t*>(L"Size");
         ListView_InsertColumn(lv_packets, packet_col::size, &col);
+        col.mask &= ~LVCF_FMT;
 
-        col.cx = 400;
         col.pszText = const_cast<wchar_t*>(L"Payload");
         ListView_InsertColumn(lv_packets, packet_col::payload, &col);
+        ListView_SetColumnWidth(lv_packets, packet_col::payload, LVSCW_AUTOSIZE_USEHEADER);
 
         // Make listview "full-row select"
         ListView_SetExtendedListViewStyle(lv_packets, LVS_EX_FULLROWSELECT);
@@ -231,6 +233,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         uint32_t const width_client { LOWORD(lParam) };
         uint32_t const height_client { HIWORD(lParam) };
         arrange_controls(hwndDlg, width_client, height_client);
+        // Resize list view columns. Needs to be done in a WM_SIZE handler, otherwise the widths are based on the
+        // outdated control width.
+        auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
+        ListView_SetColumnWidth(lv_packets, packet_col::type, LVSCW_AUTOSIZE_USEHEADER);
+        ListView_SetColumnWidth(lv_packets, packet_col::size, LVSCW_AUTOSIZE_USEHEADER);
+        ListView_SetColumnWidth(lv_packets, packet_col::payload, LVSCW_AUTOSIZE_USEHEADER);
+
         return TRUE;
     }
 
@@ -284,7 +293,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 
     case WM_NOTIFY: {
         auto const& nmhdr { *reinterpret_cast<NMHDR const*>(lParam) };
-#pragma warning(suppress : 26454)  // Disable C26454 warning for LVN_GETDISPINFOW
+#pragma warning(suppress : 26454) // Disable C26454 warning for LVN_GETDISPINFOW
         if (nmhdr.idFrom == IDC_LISTVIEW_PACKET_LIST && nmhdr.code == LVN_GETDISPINFOW)
         {
             auto& nmlvdi { *reinterpret_cast<NMLVDISPINFOW*>(lParam) };
@@ -317,8 +326,15 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 break;
 
                 case packet_col::payload: {
-                    auto const payload_str { ::to_hex_string(g_spModel->directory()[item_index].data() + 2,
-                                                             g_spModel->directory()[item_index].size()) };
+                    auto payload_str { ::to_hex_string(g_spModel->directory()[item_index].data() + 2,
+                                                       g_spModel->directory()[item_index].size()) };
+                    // Truncate payload if it exceeds available space.
+                    if (payload_str.size() >= nmlvdi.item.cchTextMax)
+                    {
+                        payload_str
+                            = payload_str.substr(0, static_cast<size_t>(nmlvdi.item.cchTextMax) - 1 - 4) + L" ...";
+                    }
+                    assert(payload_str.size() < nmlvdi.item.cchTextMax);
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, payload_str.c_str(), payload_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
