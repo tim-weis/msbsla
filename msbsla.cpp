@@ -221,6 +221,9 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         col.pszText = const_cast<wchar_t*>(L"Payload");
         ListView_InsertColumn(lv_packets, packet_col::payload, &col);
 
+        // Make listview "full-row select"
+        ListView_SetExtendedListViewStyle(lv_packets, LVS_EX_FULLROWSELECT);
+
         return TRUE;
     }
 
@@ -263,8 +266,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 
                     // Set virtual list view size
                     auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
-                    ::SendMessageW(lv_packets, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count),
-                                   0x0);
+                    ::SendMessageW(lv_packets, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count), 0x0);
                 }
                 return TRUE;
             }
@@ -282,6 +284,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 
     case WM_NOTIFY: {
         auto const& nmhdr { *reinterpret_cast<NMHDR const*>(lParam) };
+#pragma warning(suppress : 26454)  // Disable C26454 warning for LVN_GETDISPINFOW
         if (nmhdr.idFrom == IDC_LISTVIEW_PACKET_LIST && nmhdr.code == LVN_GETDISPINFOW)
         {
             auto& nmlvdi { *reinterpret_cast<NMLVDISPINFOW*>(lParam) };
