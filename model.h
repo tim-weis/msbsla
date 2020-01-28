@@ -2,7 +2,9 @@
 
 #include <wil/resource.h>
 
+#include <algorithm>
 #include <iterator>
+#include <numeric>
 #include <vector>
 
 
@@ -10,6 +12,21 @@ namespace
 {
 static constexpr auto const k_header_size { 2 };
 }
+
+
+// Enums to control sorting
+enum struct sort_direction
+{
+    asc,
+    desc
+};
+
+enum struct sort_predicate
+{
+    index,
+    type,
+    size
+};
 
 
 struct data_proxy
@@ -62,9 +79,63 @@ struct raw_data
             directory_.push_back({ current_pos, current_pos + size });
             current_pos += size;
         }
+
+        // Initialize identity mapping (i.e. no sorting)
+        sort_map_.resize(directory_.size());
+        ::std::iota(begin(sort_map_), end(sort_map_), 0);
     }
 
     auto const& directory() const noexcept { return directory_; }
+    auto const& sort_map() const noexcept
+    {
+        assert(sort_map_.size() == directory_.size());
+        return sort_map_;
+    }
+    // Returns packet at index applying the current sort map
+    auto const& packet(size_t const index) const noexcept
+    {
+        assert(index < sort_map_.size());
+        auto const mapped_index { sort_map_[index] };
+        assert(mapped_index < directory_.size());
+        return directory_[mapped_index];
+    }
+    // Apply sorting
+    // Defaults to natural sorting (sequential order as in the raw binary data)
+    void sort(sort_predicate const pred = sort_predicate::index, sort_direction const dir = sort_direction::asc)
+    {
+        // Initialize sort map
+        sort_map_.resize(directory_.size());
+        ::std::iota(begin(sort_map_), end(sort_map_), 0);
+        // Special-case sorting by index
+        switch (pred)
+        {
+        case sort_predicate::index:
+            if (dir == sort_direction::desc)
+            {
+                ::std::reverse(begin(sort_map_), end(sort_map_));
+            }
+            // Nothing to do for index/asc
+            break;
+
+        case sort_predicate::type:
+            ::std::stable_sort(begin(sort_map_), end(sort_map_), [&](size_t const lhs, size_t const rhs) {
+                return (dir == sort_direction::asc) ? directory_[lhs].type() < directory_[rhs].type()
+                                                    : directory_[lhs].type() > directory_[rhs].type();
+            });
+            break;
+
+        case sort_predicate::size:
+            ::std::stable_sort(begin(sort_map_), end(sort_map_), [&](size_t const lhs, size_t const rhs) {
+                return (dir == sort_direction::asc) ? directory_[lhs].size() < directory_[rhs].size()
+                                                    : directory_[lhs].size() > directory_[rhs].size();
+            });
+            break;
+
+        default:
+            assert(!"Unexpected sort_predicate; update this method whenever sort_predicate changes.");
+            break;
+        }
+    }
 
 private:
     // std::wstring path_name_;
@@ -72,4 +143,6 @@ private:
     unsigned char const* memory_begin_;
     unsigned char const* memory_end_;
     ::std::vector<data_proxy> directory_;
+    // Mapping for sorting; each element sort_map_[n] stores the index into the directory, given the current sorting.
+    ::std::vector<size_t> sort_map_;
 };

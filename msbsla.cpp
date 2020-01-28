@@ -11,9 +11,12 @@
 
 #include <CommCtrl.h>
 
+#include <array>
 #include <cassert>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <utility>
 #include <wchar.h>
 
 
@@ -38,7 +41,7 @@ enum class packet_col
 static HWND g_hDlg { nullptr };
 static HWND g_hLBLogList { nullptr };
 
-std::unique_ptr<raw_data> g_spModel { nullptr };
+::std::unique_ptr<raw_data> g_spModel { nullptr };
 
 
 // Local functions
@@ -91,6 +94,150 @@ static void update_sel_log_timestamp(HWND hDlg)
         // No item selected
         ::SetWindowTextW(h_timestamp, L"");
     }
+}
+
+
+enum struct sort_order
+{
+    none,
+    asc,
+    desc,
+
+    last_value = desc
+};
+
+int get_header_col_count(HWND const header)
+{
+    auto const col_count { Header_GetItemCount(header) };
+    if (col_count < 0)
+    {
+        assert(!"Unexpected condition. Cannot call GetLastError() to find out what went wrong");
+        THROW_IF_FAILED(E_FAIL);
+    }
+    return col_count;
+}
+
+
+// Find previously selected sort column (if any)
+::std::optional<::std::pair<::packet_col, ::sort_order>> get_current_sorting(HWND const header)
+{
+    auto const col_count { ::get_header_col_count(header) };
+
+    for (auto index { 0 }; index < col_count; ++index)
+    {
+        HDITEMW col_item {};
+        col_item.mask = HDI_FORMAT;
+        Header_GetItem(header, index, &col_item);
+        if (col_item.fmt & (HDF_SORTDOWN | HDF_SORTUP))
+        {
+            return ::std::pair { static_cast<packet_col>(index),
+                                 col_item.fmt & HDF_SORTDOWN ? sort_order::desc : sort_order::asc };
+        }
+    }
+
+    // No column sorting currently active
+    return {};
+}
+
+
+// Set sorting indicator on header control. Defaults to removing all visual cues.
+static void set_header_sorting(HWND const header, size_t const col_index = 0,
+                               ::sort_order const order = ::sort_order::none)
+{
+    // Parameter validation
+    ::SetLastError(ERROR_INVALID_PARAMETER);
+    THROW_LAST_ERROR_IF_NULL(header);
+
+    auto const col_count { ::get_header_col_count(header) };
+    ::SetLastError(ERROR_INVALID_PARAMETER);
+    THROW_LAST_ERROR_IF(col_count <= col_index);
+
+    for (auto current_index { 0 }; current_index < col_count; ++current_index)
+    {
+        // Unconditionally remove sorting
+        HDITEMW col_item {};
+        col_item.mask = HDI_FORMAT;
+        Header_GetItem(header, current_index, &col_item);
+        col_item.fmt &= ~(HDF_SORTDOWN | HDF_SORTUP);
+
+        // Adjust sorting on requested column
+        if (current_index == col_index)
+        {
+            switch (order)
+            {
+            case ::sort_order::asc:
+                col_item.fmt |= HDF_SORTUP;
+                break;
+
+            case ::sort_order::desc:
+                col_item.fmt |= HDF_SORTDOWN;
+                break;
+
+            case ::sort_order::none:
+            default:
+                break;
+            }
+        }
+
+        // Finally set the column format back
+        Header_SetItem(header, current_index, &col_item);
+    }
+}
+
+
+// This function returns `true`, if it handled the sort, `false` otherwise.
+// This is for convenience, so the LVN_* notification handler can simply return this function's return value.
+static bool handle_sorting(HWND const header, size_t const col_index)
+{
+    if (static_cast<packet_col const>(col_index) == packet_col::payload)
+    {
+        // Do not sort by payload column
+        return false;
+    }
+
+    // Calculate new sorting criteria.
+    // * If no sorting is active, choose 'asc' on the requested col_index.
+    // * If sorting is active, but col_index != current col_index, choose 'asc' on the requested col_index.
+    // * Otherwise advance sorting on col_index (none -> asc -> desc -> none).
+    auto const current_sorting { ::get_current_sorting(header) };
+    auto next_sorting_order { ::sort_order::none };
+    if (!current_sorting || current_sorting->first != static_cast<::packet_col>(col_index))
+    {
+        next_sorting_order = ::sort_order::asc;
+    }
+    else
+    {
+        auto next_order_as_int { static_cast<int>(current_sorting->second) + 1 };
+        next_sorting_order = static_cast<::sort_order>(next_order_as_int);
+        if (next_sorting_order > ::sort_order::last_value)
+        {
+            next_sorting_order = ::sort_order::none;
+        }
+    }
+
+    // Sanity checks
+    assert(next_sorting_order == ::sort_order::asc || next_sorting_order == ::sort_order::desc
+           || next_sorting_order == ::sort_order::none);
+    assert(col_index != static_cast<int>(::packet_col::payload));
+
+    // Update visual cues on the header control
+    ::set_header_sorting(header, col_index, next_sorting_order);
+
+    // Sort the collection
+    if (next_sorting_order == ::sort_order::none)
+    {
+        g_spModel->sort();
+    }
+    else
+    {
+        // Map UI sorting criteria onto model's sorting criteria; this is a bit clunky, may have to revisit this at some
+        // point.
+        auto const pred { static_cast<::sort_predicate>(col_index) };
+        auto const order { next_sorting_order == sort_order::asc ? ::sort_direction::asc : ::sort_direction::desc };
+        g_spModel->sort(pred, order);
+    }
+
+    return true;
 }
 
 
@@ -226,6 +373,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         // Make listview "full-row select"
         ListView_SetExtendedListViewStyle(lv_packets, LVS_EX_FULLROWSELECT);
 
+        // TEMP --- VVV --- Add a filter bar to the list view header
+        // TODO: Find out how to apply visual styles to filter bar (it does render, but looks funky).
+        // auto lv_header { ListView_GetHeader(lv_packets) };
+        // auto header_style { ::GetWindowLongPtrW(lv_header, GWL_STYLE) };
+        //::SetWindowLongPtrW(lv_header, GWL_STYLE, header_style | HDS_FILTERBAR);
+        // TEMP --- AAA
+
         return TRUE;
     }
 
@@ -236,9 +390,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         // Resize list view columns. Needs to be done in a WM_SIZE handler, otherwise the widths are based on the
         // outdated control width.
         auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
-        ListView_SetColumnWidth(lv_packets, packet_col::type, LVSCW_AUTOSIZE_USEHEADER);
-        ListView_SetColumnWidth(lv_packets, packet_col::size, LVSCW_AUTOSIZE_USEHEADER);
-        ListView_SetColumnWidth(lv_packets, packet_col::payload, LVSCW_AUTOSIZE_USEHEADER);
+        auto const col_widths { ::std::array { ::std::make_pair(packet_col::type, LVSCW_AUTOSIZE_USEHEADER),
+                                               ::std::make_pair(packet_col::size, LVSCW_AUTOSIZE_USEHEADER),
+                                               ::std::make_pair(packet_col::payload, LVSCW_AUTOSIZE_USEHEADER) } };
+        for (auto const [index, width] : col_widths)
+        {
+            ListView_SetColumnWidth(lv_packets, index, width);
+        }
 
         return TRUE;
     }
@@ -273,8 +431,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                     g_spModel.reset(new raw_data(dir_entry.path().c_str()));
                     auto const packet_count { g_spModel->directory().size() };
 
-                    // Set virtual list view size
                     auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
+                    // Reset sorting indicators
+                    ::set_header_sorting(ListView_GetHeader(lv_packets));
+                    // Set virtual list view size
                     ::SendMessageW(lv_packets, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count), 0x0);
                 }
                 return TRUE;
@@ -305,29 +465,30 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 switch (col_index)
                 {
                 case packet_col::index: {
-                    auto const index_str { ::std::to_wstring(item_index + 1) };
+                    auto const mapped_index { g_spModel->sort_map()[item_index] };
+                    auto const index_str { ::std::to_wstring(mapped_index + 1) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, index_str.c_str(), index_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;
 
                 case packet_col::type: {
-                    auto const type_str { ::to_hex_string(g_spModel->directory()[item_index].type()) };
+                    auto const type_str { ::to_hex_string(g_spModel->packet(item_index).type()) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, type_str.c_str(), type_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;
 
                 case packet_col::size: {
-                    auto const size_str { ::std::to_wstring(g_spModel->directory()[item_index].size()) };
+                    auto const size_str { ::std::to_wstring(g_spModel->packet(item_index).size()) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, size_str.c_str(), size_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;
 
                 case packet_col::payload: {
-                    auto payload_str { ::to_hex_string(g_spModel->directory()[item_index].data() + 2,
-                                                       g_spModel->directory()[item_index].size()) };
+                    auto payload_str { ::to_hex_string(g_spModel->packet(item_index).data() + 2,
+                                                       g_spModel->packet(item_index).size()) };
                     // Truncate payload if it exceeds available space.
                     if (payload_str.size() >= nmlvdi.item.cchTextMax)
                     {
@@ -346,6 +507,23 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 return TRUE;
             }
         }
+
+        // Handle column click to toggle sorting
+#pragma warning(suppress : 26454)
+        if (nmhdr.idFrom == IDC_LISTVIEW_PACKET_LIST && nmhdr.code == LVN_COLUMNCLICK)
+        {
+            auto const& msg_info { *reinterpret_cast<NMLISTVIEW const*>(lParam) };
+            auto header_handle { ListView_GetHeader(nmhdr.hwndFrom) };
+
+            if (handle_sorting(header_handle, msg_info.iSubItem))
+            {
+                auto const lv_packets { nmhdr.hwndFrom };
+                // Refresh list view
+                ListView_RedrawItems(lv_packets, 0, static_cast<size_t>(ListView_GetItemCount(lv_packets)) - 1);
+                return TRUE;
+            }
+        }
+
         return FALSE;
     }
 
@@ -371,7 +549,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE /*hPrevInstance*/, _In_ LPWSTR /*lpCmdLine*/,
                       _In_ int /*nCmdShow*/)
 {
-    INITCOMMONCONTROLSEX icc { static_cast<DWORD>(sizeof(icc)), ICC_STANDARD_CLASSES };
+    INITCOMMONCONTROLSEX icc { static_cast<DWORD>(sizeof(icc)), ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES };
     THROW_IF_WIN32_BOOL_FALSE(::InitCommonControlsEx(&icc));
 
     auto const result { ::DialogBoxParamW(hInstance, MAKEINTRESOURCEW(IDD_MAIN), nullptr, &::MainDlgProc, 0l) };
