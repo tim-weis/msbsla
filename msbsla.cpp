@@ -34,14 +34,17 @@ enum class packet_col
     index,
     type,
     size,
-    payload
+    payload,
+    details,
+
+    last_value = details
 };
 
 // Local data
 static HWND g_hDlg { nullptr };
 static HWND g_hLBLogList { nullptr };
 
-::std::unique_ptr<raw_data> g_spModel { nullptr };
+::std::unique_ptr<model> g_spModel { nullptr };
 
 
 // Local functions
@@ -189,7 +192,7 @@ static void set_header_sorting(HWND const header, size_t const col_index = 0,
 // This is for convenience, so the LVN_* notification handler can simply return this function's return value.
 static bool handle_sorting(HWND const header, size_t const col_index)
 {
-    if (static_cast<packet_col const>(col_index) == packet_col::payload)
+    if (static_cast<packet_col const>(col_index) >= packet_col::payload)
     {
         // Do not sort by payload column
         return false;
@@ -226,7 +229,7 @@ static bool handle_sorting(HWND const header, size_t const col_index)
     // Sort the collection
     if (next_sorting_order == ::sort_order::none)
     {
-        g_spModel->sort();
+        g_spModel->data().sort();
     }
     else
     {
@@ -234,7 +237,7 @@ static bool handle_sorting(HWND const header, size_t const col_index)
         // point.
         auto const pred { static_cast<::sort_predicate>(col_index) };
         auto const order { next_sorting_order == sort_order::asc ? ::sort_direction::asc : ::sort_direction::desc };
-        g_spModel->sort(pred, order);
+        g_spModel->data().sort(pred, order);
     }
 
     return true;
@@ -370,6 +373,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         ListView_InsertColumn(lv_packets, packet_col::payload, &col);
         ListView_SetColumnWidth(lv_packets, packet_col::payload, LVSCW_AUTOSIZE_USEHEADER);
 
+        col.pszText = const_cast<wchar_t*>(L"Details");
+        ListView_InsertColumn(lv_packets, packet_col::details, &col);
+        ListView_SetColumnWidth(lv_packets, packet_col::details, LVSCW_AUTOSIZE_USEHEADER);
+
         // Make listview "full-row select"
         ListView_SetExtendedListViewStyle(lv_packets, LVS_EX_FULLROWSELECT);
 
@@ -392,7 +399,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
         auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
         auto const col_widths { ::std::array { ::std::make_pair(packet_col::type, LVSCW_AUTOSIZE_USEHEADER),
                                                ::std::make_pair(packet_col::size, LVSCW_AUTOSIZE_USEHEADER),
-                                               ::std::make_pair(packet_col::payload, LVSCW_AUTOSIZE_USEHEADER) } };
+                                               ::std::make_pair(packet_col::payload, LVSCW_AUTOSIZE_USEHEADER),
+                                               ::std::make_pair(packet_col::details, LVSCW_AUTOSIZE_USEHEADER) } };
         for (auto const [index, width] : col_widths)
         {
             ListView_SetColumnWidth(lv_packets, index, width);
@@ -428,8 +436,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                     auto const& dir_entry { *reinterpret_cast<fs::directory_entry const*>(
                         ::SendMessageW(lb_logs, LB_GETITEMDATA, sel_index, 0)) };
 
-                    g_spModel.reset(new raw_data(dir_entry.path().c_str()));
-                    auto const packet_count { g_spModel->directory().size() };
+                    g_spModel.reset(new model(dir_entry.path().c_str()));
+                    auto const packet_count { g_spModel->data().directory().size() };
 
                     auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
                     // Reset sorting indicators
@@ -465,7 +473,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 switch (col_index)
                 {
                 case packet_col::index: {
-                    auto const mapped_index { g_spModel->sort_map()[item_index] };
+                    auto const mapped_index { g_spModel->data().sort_map()[item_index] };
                     auto const index_str { ::std::to_wstring(mapped_index + 1) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, index_str.c_str(), index_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
@@ -473,22 +481,22 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 break;
 
                 case packet_col::type: {
-                    auto const type_str { ::to_hex_string(g_spModel->packet(item_index).type()) };
+                    auto const type_str { ::to_hex_string(g_spModel->data().packet(item_index).type()) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, type_str.c_str(), type_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;
 
                 case packet_col::size: {
-                    auto const size_str { ::std::to_wstring(g_spModel->packet(item_index).size()) };
+                    auto const size_str { ::std::to_wstring(g_spModel->data().packet(item_index).size()) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, size_str.c_str(), size_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;
 
                 case packet_col::payload: {
-                    auto payload_str { ::to_hex_string(g_spModel->packet(item_index).data() + 2,
-                                                       g_spModel->packet(item_index).size()) };
+                    auto payload_str { ::to_hex_string(g_spModel->data().packet(item_index).data() + 2,
+                                                       g_spModel->data().packet(item_index).size()) };
                     // Truncate payload if it exceeds available space.
                     if (payload_str.size() >= nmlvdi.item.cchTextMax)
                     {
@@ -497,6 +505,22 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                     }
                     assert(payload_str.size() < nmlvdi.item.cchTextMax);
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, payload_str.c_str(), payload_str.size());
+                    nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                }
+                break;
+
+                case packet_col::details: {
+                    auto const details { ::details_from_packet(g_spModel->data().packet(item_index),
+                                                               g_spModel->known_types()) };
+                    auto details_str { details.value_or(L"n/a") };
+                    // Truncate payload if it exceeds available space.
+                    if (details_str.size() >= nmlvdi.item.cchTextMax)
+                    {
+                        details_str
+                            = details_str.substr(0, static_cast<size_t>(nmlvdi.item.cchTextMax) - 1 - 4) + L" ...";
+                    }
+                    assert(details_str.size() < nmlvdi.item.cchTextMax);
+                    ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, details_str.c_str(), details_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;

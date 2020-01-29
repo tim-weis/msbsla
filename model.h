@@ -3,7 +3,9 @@
 #include <wil/resource.h>
 
 #include <algorithm>
+#include <cassert>
 #include <iterator>
+#include <map>
 #include <numeric>
 #include <vector>
 
@@ -29,6 +31,7 @@ enum struct sort_predicate
 };
 
 
+// Raw data access
 struct data_proxy
 {
     data_proxy() = delete;
@@ -145,4 +148,46 @@ private:
     ::std::vector<data_proxy> directory_;
     // Mapping for sorting; each element sort_map_[n] stores the index into the directory, given the current sorting.
     ::std::vector<size_t> sort_map_;
+};
+
+
+// Packet information handling
+enum struct payload_type
+{
+    unknown,
+    ui8,
+    ui32,
+    file_time,
+
+    last_value = file_time
+};
+
+struct payload_element
+{
+    size_t offset;
+    size_t size;
+    payload_type type;
+};
+
+using payload_elements_container = ::std::vector<::payload_element>;
+using payload_container = ::std::map<unsigned char, payload_elements_container>;
+
+
+// Declare actual model for use by clients
+struct model
+{
+    explicit model(wchar_t const* path_name) : data_ { path_name }
+    {
+        // TODO: Read known types from file; initializing with a constant collection for testing
+        known_types_[0x00].emplace_back(::payload_element { 0, 8, payload_type::file_time });
+        known_types_[0x0f].emplace_back(::payload_element { 0, 4, payload_type::ui32 });
+    }
+
+    auto& data() noexcept { return data_; }
+    auto const& data() const noexcept { return data_; }
+    auto const& known_types() const noexcept { return known_types_; }
+
+private:
+    raw_data data_;
+    payload_container known_types_;
 };
