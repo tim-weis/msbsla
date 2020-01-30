@@ -7,6 +7,8 @@
 #include <iterator>
 #include <map>
 #include <numeric>
+#include <optional>
+#include <string>
 #include <vector>
 
 
@@ -167,10 +169,19 @@ struct payload_element
     size_t offset;
     size_t size;
     payload_type type;
+    ::std::optional<::std::wstring> comment;
 };
 
 using payload_elements_container = ::std::vector<::payload_element>;
-using payload_container = ::std::map<unsigned char, payload_elements_container>;
+
+struct packet_description
+{
+    ::std::optional<::std::wstring> name;
+    // TODO: Add field to allow users to provide a confidence level (unknown .. known beyond doubt)
+    payload_elements_container elements;
+};
+
+using payload_container = ::std::map<unsigned char, ::packet_description>;
 
 
 // Declare actual model for use by clients
@@ -179,15 +190,21 @@ struct model
     explicit model(wchar_t const* path_name) : data_ { path_name }
     {
         // TODO: Read known types from file; initializing with a constant collection for testing
-        known_types_[0x00].emplace_back(::payload_element { 0, 8, payload_type::file_time });
-        known_types_[0x0f].emplace_back(::payload_element { 0, 4, payload_type::ui32 });
+        // [TIMESTAMP]
+        packet_descriptions_[0x00] = { L"[TIMESTAMP]", { ::payload_element { 0, 8, payload_type::file_time, {} } } };
+        // [SEQUENCE_ID]
+        packet_descriptions_[0x0f] = { L"[SEQUENCE_ID]", { ::payload_element { 0, 4, payload_type::ui32, {} } } };
+        // [HEART_RATE]
+        packet_descriptions_[0x80] = { L"[HEARTRATE]",
+                                       { ::payload_element { 0, 1, payload_type::ui8, {} },
+                                         ::payload_element { 1, 1, payload_type::ui8, {} } } };
     }
 
     auto& data() noexcept { return data_; }
     auto const& data() const noexcept { return data_; }
-    auto const& known_types() const noexcept { return known_types_; }
+    auto const& packet_descriptions() const noexcept { return packet_descriptions_; }
 
 private:
     raw_data data_;
-    payload_container known_types_;
+    payload_container packet_descriptions_;
 };

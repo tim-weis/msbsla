@@ -67,15 +67,15 @@ inline ::std::wstring to_hex_string(unsigned char const* data, size_t length)
 
 // TODO: Refactor to not use the intended-to-be-internal data_proxy
 inline ::std::optional<::std::wstring> details_from_packet(::data_proxy const& packet,
-                                                           ::payload_container const& known_types)
+                                                           ::payload_container const& package_descriptions)
 {
-    if (known_types.contains(packet.type()))
+    if (package_descriptions.contains(packet.type()))
     {
-        auto const& elements { known_types.find(packet.type())->second };
-        ::std::wstring ret {};
-        for (auto const& el : elements)
+        auto const& description { package_descriptions.find(packet.type())->second };
+        ::std::wstring ret { description.name.has_value() ? description.name.value() + L" " : L"<unknown>" };
+        for (auto const& el : description.elements)
         {
-            ret += L"[" + ::std::to_wstring(el.offset) + L":" + ::std::to_wstring(el.size) + L"] ";
+            ret += L" {" + ::std::to_wstring(el.offset) + L":" + ::std::to_wstring(el.size) + L"} ";
 
             switch (el.type)
             {
@@ -92,17 +92,14 @@ inline ::std::optional<::std::wstring> details_from_packet(::data_proxy const& p
             }
             break;
 
+            case payload_type::ui8: {
+                ret += ::std::to_wstring(*(packet.data() + k_header_size + el.offset));
+            }
+            break;
+
             default:
                 break;
             }
-
-            ret += L" ";
-        }
-
-        if (ret.size() > 0)
-        {
-            // Strip trailing space character
-            ret.resize(ret.size() - 1);
         }
 
         return ret;

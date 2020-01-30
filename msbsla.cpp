@@ -511,7 +511,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 
                 case packet_col::details: {
                     auto const details { ::details_from_packet(g_spModel->data().packet(item_index),
-                                                               g_spModel->known_types()) };
+                                                               g_spModel->packet_descriptions()) };
                     auto details_str { details.value_or(L"n/a") };
                     // Truncate payload if it exceeds available space.
                     if (details_str.size() >= nmlvdi.item.cchTextMax)
