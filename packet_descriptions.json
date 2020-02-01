@@ -1,0 +1,65 @@
+{ "descriptions": [
+  { "type": "0x00",
+    "name": "[TIMESTAMP]",
+    "elements": [
+      { "offset": 0,
+        "length": 8,
+        "display_type": "file_time"
+      }
+    ]
+  },
+  { "type": "0x0d",
+    "elements": [
+      { "offset": 0,
+        "length": 1,
+        "display_type": "ui8"
+      },
+      { "offset": 1,
+        "length": 8,
+        "display_type": "file_time"
+      },
+      { "offset": 9,
+        "length": 1,
+        "display_type": "ui8"
+      }
+    ]
+  },
+  { "type": "0x0f",
+    "name": "[SEQUENCE_ID]",
+    "elements": [
+      { "offset": 0,
+        "length": 4,
+        "display_type": "ui32"
+      }
+    ]
+  },
+  { "type": "0x80",
+    "name": "[HEARTRATE]",
+    "elements": [
+      { "offset": 0,
+        "length": 1,
+        "display_type": "ui8"
+      },
+      { "offset": 1,
+        "length": 1,
+        "display_type": "ui8"
+      }
+    ]
+  },
+  { "type": "0xe0",
+    "elements": [
+      { "offset": 0,
+        "length": 1,
+        "display_type":"ui8"
+      },
+      { "offset": 1,
+        "length": 8,
+        "display_type": "file_time"
+      },
+      { "offset": 9,
+        "length": 1,
+        "display_type": "ui8"
+      }
+    ]
+  }
+]}

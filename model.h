@@ -1,9 +1,13 @@
 #pragma once
 
+#include "char_encoding_utils.h"
+
+#include <nlohmann/json.hpp>
 #include <wil/resource.h>
 
 #include <algorithm>
 #include <cassert>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <numeric>
@@ -184,30 +188,63 @@ struct packet_description
 using payload_container = ::std::map<unsigned char, ::packet_description>;
 
 
+NLOHMANN_JSON_SERIALIZE_ENUM(::payload_type, { { ::payload_type::unknown, nullptr },
+                                               { ::payload_type::ui8, "ui8" },
+                                               { ::payload_type::ui32, "ui32" },
+                                               { ::payload_type::file_time, "file_time" } })
+
+
 // Declare actual model for use by clients
 struct model
 {
     explicit model(wchar_t const* path_name) : data_ { path_name }
     {
-        // TODO: Read known types from file; initializing with a constant collection for testing
-        // [TIMESTAMP]
-        packet_descriptions_[0x00] = { L"[TIMESTAMP]", { ::payload_element { 0, 8, ::payload_type::file_time, {} } } };
-        // <unknown>
-        packet_descriptions_[0x0d] = { {},
-                                       { ::payload_element { 0, 1, ::payload_type::ui8, {} },
-                                         ::payload_element { 1, 8, ::payload_type::file_time, {} },
-                                         ::payload_element { 9, 1, ::payload_type::ui8, {} } } };
-        // [SEQUENCE_ID]
-        packet_descriptions_[0x0f] = { L"[SEQUENCE_ID]", { ::payload_element { 0, 4, ::payload_type::ui32, {} } } };
-        // [HEART_RATE]
-        packet_descriptions_[0x80] = { L"[HEARTRATE]",
-                                       { ::payload_element { 0, 1, ::payload_type::ui8, {} },
-                                         ::payload_element { 1, 1, ::payload_type::ui8, {} } } };
-        // <unknown>
-        packet_descriptions_[0xe0] = { {},
-                                       { ::payload_element { 0, 1, ::payload_type::ui8, {} },
-                                         ::payload_element { 1, 8, ::payload_type::file_time, {} },
-                                         ::payload_element { 9, 1, ::payload_type::ui8, {} } } };
+        // Read (known) packet descriptions from JSON file. The JSON file needs to have the following layout:
+
+        // { "descriptions": [
+        //   { "type": "0x00",      /* type: string (needs to be a string due to numbers not supporting hex) */
+        //     "name": "[name]",    /* name: string (optional) */
+        //     "elements": [
+        //       { "offset": 0,     /* offset: number */
+        //         "length": 8,     /* length: number */
+        //         "display_type": "file_time",     /* display_type: string (serialized ::payload_type enumeration */
+        //         "comment": "<some comment>"      /* comment: string (optional) */
+        //       },
+        //       ...
+        //     ]
+        //   },
+        //   ...
+        // ]}
+
+        // TODO: Prepend with executable path
+        auto ifs { ::std::ifstream { L"packet_descriptions.json" } };
+        ::nlohmann::json j {};
+        ifs >> j;
+        for (auto const& descr : j.at("descriptions"))
+        {
+            // Read index; this is stored as a string because JSON doesn't support hexadecimal encoding.
+            size_t const index { static_cast<size_t const>(::std::stoll(descr.at("type").get<::std::string>(), 0, 0)) };
+            auto& packet_description { packet_descriptions_[static_cast<uint8_t>(index)] };
+
+            // Set optional name
+            if (auto name_it { descr.find("name") }; name_it != end(descr))
+            {
+                packet_description.name = ::to_utf16(name_it->get<::std::string>());
+            }
+
+            // Append elements list
+            for (auto const& element : descr.at("elements"))
+            {
+                auto const offset { element.at("offset").get<size_t>() };
+                auto const length { element.at("length").get<size_t>() };
+                auto const display_type { element.at("display_type").get<::payload_type>() };
+                auto const comment { element.contains("comment") ? ::std::optional<::std::wstring> { ::to_utf16(
+                                         element.at("comment").get<::std::string>()) }
+                                                                 : ::std::nullopt };
+
+                packet_description.elements.emplace_back(::payload_element { offset, length, display_type, comment });
+            }
+        }
     }
 
     auto& data() noexcept { return data_; }
