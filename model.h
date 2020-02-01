@@ -191,13 +191,23 @@ struct model
     {
         // TODO: Read known types from file; initializing with a constant collection for testing
         // [TIMESTAMP]
-        packet_descriptions_[0x00] = { L"[TIMESTAMP]", { ::payload_element { 0, 8, payload_type::file_time, {} } } };
+        packet_descriptions_[0x00] = { L"[TIMESTAMP]", { ::payload_element { 0, 8, ::payload_type::file_time, {} } } };
+        // <unknown>
+        packet_descriptions_[0x0d] = { {},
+                                       { ::payload_element { 0, 1, ::payload_type::ui8, {} },
+                                         ::payload_element { 1, 8, ::payload_type::file_time, {} },
+                                         ::payload_element { 9, 1, ::payload_type::ui8, {} } } };
         // [SEQUENCE_ID]
-        packet_descriptions_[0x0f] = { L"[SEQUENCE_ID]", { ::payload_element { 0, 4, payload_type::ui32, {} } } };
+        packet_descriptions_[0x0f] = { L"[SEQUENCE_ID]", { ::payload_element { 0, 4, ::payload_type::ui32, {} } } };
         // [HEART_RATE]
         packet_descriptions_[0x80] = { L"[HEARTRATE]",
-                                       { ::payload_element { 0, 1, payload_type::ui8, {} },
-                                         ::payload_element { 1, 1, payload_type::ui8, {} } } };
+                                       { ::payload_element { 0, 1, ::payload_type::ui8, {} },
+                                         ::payload_element { 1, 1, ::payload_type::ui8, {} } } };
+        // <unknown>
+        packet_descriptions_[0xe0] = { {},
+                                       { ::payload_element { 0, 1, ::payload_type::ui8, {} },
+                                         ::payload_element { 1, 8, ::payload_type::file_time, {} },
+                                         ::payload_element { 9, 1, ::payload_type::ui8, {} } } };
     }
 
     auto& data() noexcept { return data_; }
