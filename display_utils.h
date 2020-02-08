@@ -81,19 +81,29 @@ inline ::std::optional<::std::wstring> details_from_packet(::data_proxy const& p
             {
             case payload_type::file_time: {
                 assert(el.size == sizeof(::FILETIME));
-                auto const& ft { *reinterpret_cast<::FILETIME const*>(packet.data() + k_header_size + el.offset) };
+                auto const& ft { *reinterpret_cast<::FILETIME const*>(packet.data() + packet.header_size()
+                                                                      + el.offset) };
                 ret += ::format_timestamp(ft);
             }
             break;
 
             case payload_type::ui32: {
                 assert(el.size == sizeof(uint32_t));
-                ret += ::std::to_wstring(*reinterpret_cast<uint32_t const*>(packet.data() + k_header_size + el.offset));
+                ret += ::std::to_wstring(
+                    *reinterpret_cast<uint32_t const*>(packet.data() + packet.header_size() + el.offset));
+            }
+            break;
+
+            case payload_type::ui16: {
+                assert(el.size == sizeof(uint16_t));
+                assert(el.offset + el.size <= packet.payload_size());
+                ret += ::std::to_wstring(
+                    *reinterpret_cast<uint16_t const*>(packet.data() + packet.header_size() + el.offset));
             }
             break;
 
             case payload_type::ui8: {
-                ret += ::std::to_wstring(*(packet.data() + k_header_size + el.offset));
+                ret += ::std::to_wstring(*(packet.data() + packet.header_size() + el.offset));
             }
             break;
 

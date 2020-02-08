@@ -10,6 +10,8 @@
 #include <wil/resource.h>
 
 #include <CommCtrl.h>
+#include <Windows.h>
+#include <windowsx.h>
 
 #include <array>
 #include <cassert>
@@ -41,8 +43,14 @@ enum class packet_col
 };
 
 // Local data
-static HWND g_hDlg { nullptr };
-static HWND g_hLBLogList { nullptr };
+static HWND g_label_logs_handle { nullptr };
+static HWND g_lb_logs_handle { nullptr };
+static HWND g_label_timestamp_handle { nullptr };
+static HWND g_static_timestamp_handle { nullptr };
+static HWND g_datetime_start_date_handle { nullptr };
+static HWND g_datetime_start_time_handle { nullptr };
+static HWND g_button_load_handle { nullptr };
+static HWND g_lv_packets_handle { nullptr };
 
 ::std::unique_ptr<model> g_spModel { nullptr };
 
@@ -80,23 +88,61 @@ static void populate_log_list(wchar_t const* log_dir, HWND list_box)
 }
 
 
-static void update_sel_log_timestamp(HWND hDlg)
+static FILETIME update_sel_log_timestamp(HWND const log_list_handle, HWND const static_timestamp_handle)
 {
-    auto h_timestamp { ::GetDlgItem(hDlg, IDC_STATIC_TIMESTAMP) };
-    intptr_t sel_index { ::SendMessageW(::GetDlgItem(hDlg, IDC_LB_LOGS), LB_GETCURSEL, 0, 0) };
+    assert(log_list_handle != nullptr);
+    assert(static_timestamp_handle != nullptr);
+
+    FILETIME ft { ::invalid_filetime() };
+
+    intptr_t sel_index { ::SendMessageW(log_list_handle, LB_GETCURSEL, 0, 0) };
     if (sel_index >= 0)
     {
         auto entry { reinterpret_cast<fs::directory_entry const*>(
-            ::SendMessageW(::GetDlgItem(hDlg, IDC_LB_LOGS), LB_GETITEMDATA, sel_index, 0)) };
-        auto const timestamp { get_start_timestamp(entry->path().c_str()) };
-        auto const formatted_timestamp { ::format_timestamp(timestamp) };
-        ::SetWindowTextW(h_timestamp, formatted_timestamp.c_str());
+            ::SendMessageW(g_lb_logs_handle, LB_GETITEMDATA, sel_index, 0)) };
+        ft = get_start_timestamp(entry->path().c_str());
+        auto const formatted_timestamp { ::format_timestamp(ft) };
+        ::SetWindowTextW(static_timestamp_handle, formatted_timestamp.c_str());
     }
     else
     {
         // No item selected
-        ::SetWindowTextW(h_timestamp, L"");
+        ::SetWindowTextW(static_timestamp_handle, L"");
     }
+
+    return ft;
+}
+
+
+// Synchronizes the accompanying time control to the state of the date control. The state can be changed by clicking the
+// embedded checkbox.
+static void sync_time_state_to_date_state(HWND const date_ctrl, HWND const time_ctrl)
+{
+    DATETIMEPICKERINFO dti { .cbSize = sizeof(dti) };
+    DateTime_GetDateTimePickerInfo(date_ctrl, &dti);
+
+    auto is_enabled { (dti.stateCheck & STATE_SYSTEM_CHECKED) != 0 };
+    ::EnableWindow(time_ctrl, { is_enabled });
+}
+
+
+static void update_datetime_start(HWND const date_ctrl, HWND const time_ctrl, ::FILETIME const ft)
+{
+    if (ft == ::invalid_filetime())
+    {
+        DateTime_SetSystemtime(date_ctrl, GDT_NONE, nullptr);
+        DateTime_SetSystemtime(time_ctrl, GDT_NONE, nullptr);
+    }
+    else
+    {
+        auto const st { ::to_systemtime(ft) };
+        DateTime_SetSystemtime(date_ctrl, GDT_VALID, &st);
+        DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
+    }
+
+    // This may have changed the 'enabled' state of the date control, so we need to synchronize the accompanying time
+    // control.
+    ::sync_time_state_to_date_state(date_ctrl, time_ctrl);
 }
 
 
@@ -229,7 +275,7 @@ static bool handle_sorting(HWND const header, size_t const col_index)
     // Sort the collection
     if (next_sorting_order == ::sort_order::none)
     {
-        g_spModel->data().sort();
+        g_spModel->sort();
     }
     else
     {
@@ -237,16 +283,15 @@ static bool handle_sorting(HWND const header, size_t const col_index)
         // point.
         auto const pred { static_cast<::sort_predicate>(col_index) };
         auto const order { next_sorting_order == sort_order::asc ? ::sort_direction::asc : ::sort_direction::desc };
-        g_spModel->data().sort(pred, order);
+        g_spModel->sort(pred, order);
     }
 
     return true;
 }
 
 
-static RECT window_rect_in_client_coords(HWND dlg_handle, int control_id)
+static RECT window_rect_in_client_coords(HWND const dlg_handle, HWND const control_handle)
 {
-    auto const control_handle { ::GetDlgItem(dlg_handle, control_id) };
     assert(control_handle != nullptr);
     RECT window_rect {};
     THROW_IF_WIN32_BOOL_FALSE(::GetWindowRect(control_handle, &window_rect));
@@ -256,8 +301,17 @@ static RECT window_rect_in_client_coords(HWND dlg_handle, int control_id)
 }
 
 
+static RECT window_rect_in_client_coords(HWND const dlg_handle, int const control_id)
+{
+    return window_rect_in_client_coords(dlg_handle, ::GetDlgItem(dlg_handle, control_id));
+}
+
+
 static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t height_client)
 {
+    // The spacing/margin information is taken from
+    // [Layout](https://docs.microsoft.com/en-us/windows/win32/uxguide/vis-layout).
+
     // Calculate outer dialog margins (7 DLU's on either side)
     RECT rect_tmp { .left = 7, .top = 7, .right = 7, .bottom = 7 };
     THROW_IF_WIN32_BOOL_FALSE(::MapDialogRect(dlg_handle, &rect_tmp));
@@ -277,10 +331,9 @@ static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t heig
     // Left: margin_x
     // Width: from resource script
     // Height: from resource script
-    RECT rc_logs_label { ::window_rect_in_client_coords(dlg_handle, IDC_STATIC_SENSOR_LOG_LIST_LABEL) };
+    RECT rc_logs_label { ::window_rect_in_client_coords(dlg_handle, g_label_logs_handle) };
     ::OffsetRect(&rc_logs_label, margin_x - rc_logs_label.left, margin_y - rc_logs_label.top);
-    auto const logs_label_handle { ::GetDlgItem(dlg_handle, IDC_STATIC_SENSOR_LOG_LIST_LABEL) };
-    ::SetWindowPos(logs_label_handle, nullptr, rc_logs_label.left, rc_logs_label.top, 0, 0,
+    ::SetWindowPos(g_label_logs_handle, nullptr, rc_logs_label.left, rc_logs_label.top, 0, 0,
                    SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
     // Position sensor log list
@@ -292,30 +345,42 @@ static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t heig
     static constexpr auto const log_list_height { 320 };
     RECT rc_logs { .left = 0, .top = 0, .right = log_list_width, .bottom = log_list_height };
     ::OffsetRect(&rc_logs, rc_logs_label.left, rc_logs_label.bottom + space_y_related);
-    auto const logs_handle { ::GetDlgItem(dlg_handle, IDC_LB_LOGS) };
-    ::SetWindowPos(logs_handle, nullptr, rc_logs.left, rc_logs.top, ::width(rc_logs), ::height(rc_logs),
+    ::SetWindowPos(g_lb_logs_handle, nullptr, rc_logs.left, rc_logs.top, ::width(rc_logs), ::height(rc_logs),
                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
     // Position sensor log information label
-    auto rc_log_ts_label { ::window_rect_in_client_coords(dlg_handle, IDC_STATIC_SENSOR_LOG_TIMESTAMP_LABEL) };
+    auto rc_log_ts_label { ::window_rect_in_client_coords(dlg_handle, g_label_timestamp_handle) };
     ::OffsetRect(&rc_log_ts_label, rc_logs.right + margin_y - rc_log_ts_label.left, rc_logs.top - rc_log_ts_label.top);
-    auto const log_ts_label_handle { ::GetDlgItem(dlg_handle, IDC_STATIC_SENSOR_LOG_TIMESTAMP_LABEL) };
-    ::SetWindowPos(log_ts_label_handle, nullptr, rc_log_ts_label.left, rc_log_ts_label.top, ::width(rc_log_ts_label),
-                   ::height(rc_log_ts_label), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
-
-    // Position sensor log timestamp
-    auto rc_log_ts { ::window_rect_in_client_coords(dlg_handle, IDC_STATIC_TIMESTAMP) };
-    ::OffsetRect(&rc_log_ts, rc_log_ts_label.left - rc_log_ts.left,
-                 rc_log_ts_label.bottom + space_y_related - rc_log_ts.top);
-    auto const log_ts_handle { ::GetDlgItem(dlg_handle, IDC_STATIC_TIMESTAMP) };
-    ::SetWindowPos(log_ts_handle, nullptr, rc_log_ts.left, rc_log_ts.top, ::width(rc_log_ts), ::height(rc_log_ts),
+    ::SetWindowPos(g_label_timestamp_handle, nullptr, rc_log_ts_label.left, rc_log_ts_label.top,
+                   ::width(rc_log_ts_label), ::height(rc_log_ts_label),
                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
+    // Position sensor log timestamp
+    auto rc_log_ts { ::window_rect_in_client_coords(dlg_handle, g_static_timestamp_handle) };
+    ::OffsetRect(&rc_log_ts, rc_log_ts_label.left - rc_log_ts.left,
+                 rc_log_ts_label.bottom + space_y_related - rc_log_ts.top);
+    ::SetWindowPos(g_static_timestamp_handle, nullptr, rc_log_ts.left, rc_log_ts.top, ::width(rc_log_ts),
+                   ::height(rc_log_ts), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position date-time picker (start date)
+    auto rc_date_start { ::window_rect_in_client_coords(dlg_handle, g_datetime_start_date_handle) };
+    ::OffsetRect(&rc_date_start, rc_log_ts.left - rc_date_start.left,
+                 rc_log_ts.bottom + space_y_unrelated - rc_date_start.top);
+    ::SetWindowPos(g_datetime_start_date_handle, nullptr, rc_date_start.left, rc_date_start.top, ::width(rc_date_start),
+                   ::height(rc_date_start), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position date-time picker (start time)
+    auto rc_time_start { ::window_rect_in_client_coords(dlg_handle, g_datetime_start_time_handle) };
+    // TODO: Verify whether 'margin_x' is the correct spacing
+    ::OffsetRect(&rc_time_start, rc_date_start.right + margin_x - rc_time_start.left,
+                 rc_date_start.top - rc_time_start.top);
+    ::SetWindowPos(g_datetime_start_time_handle, nullptr, rc_time_start.left, rc_time_start.top, ::width(rc_time_start),
+                   ::height(rc_time_start), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
     // Position "Load" button
-    auto rc_load { ::window_rect_in_client_coords(dlg_handle, IDC_BUTTON_LOAD_LOG) };
+    auto rc_load { ::window_rect_in_client_coords(dlg_handle, g_button_load_handle) };
     ::OffsetRect(&rc_load, rc_log_ts_label.left - rc_load.left, rc_logs.bottom - rc_load.bottom);
-    auto const load_handle { ::GetDlgItem(dlg_handle, IDC_BUTTON_LOAD_LOG) };
-    ::SetWindowPos(load_handle, nullptr, rc_load.left, rc_load.top, ::width(rc_load), ::height(rc_load),
+    ::SetWindowPos(g_button_load_handle, nullptr, rc_load.left, rc_load.top, ::width(rc_load), ::height(rc_load),
                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
     // Position packet list
@@ -327,8 +392,21 @@ static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t heig
                       .top = rc_logs.bottom + space_y_unrelated,
                       .right = width_client - margin_x,
                       .bottom = height_client - margin_y };
-    ::SetWindowPos(::GetDlgItem(dlg_handle, IDC_LISTVIEW_PACKET_LIST), nullptr, rc_packets.left, rc_packets.top,
-                   ::width(rc_packets), ::height(rc_packets), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+    ::SetWindowPos(g_lv_packets_handle, nullptr, rc_packets.left, rc_packets.top, ::width(rc_packets),
+                   ::height(rc_packets), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+}
+
+
+void set_packets_list_column_widths(HWND const packets_list)
+{
+    auto const col_widths { ::std::array { ::std::make_pair(packet_col::type, LVSCW_AUTOSIZE_USEHEADER),
+                                           ::std::make_pair(packet_col::size, LVSCW_AUTOSIZE_USEHEADER),
+                                           ::std::make_pair(packet_col::payload, LVSCW_AUTOSIZE_USEHEADER),
+                                           ::std::make_pair(packet_col::details, LVSCW_AUTOSIZE_USEHEADER) } };
+    for (auto const [index, width] : col_widths)
+    {
+        ListView_SetColumnWidth(packets_list, index, width);
+    }
 }
 
 
@@ -340,124 +418,160 @@ auto const& log_location {
 // TEMP --- AAA
 
 
-INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM lParam)
+#pragma region Message handlers
+
+BOOL OnInitDialog(HWND hwnd, HWND /*hwndFocus*/, LPARAM /*lParam*/)
 {
-    switch (message)
+    // Store window handles in globals for convenience
+    g_label_logs_handle = ::GetDlgItem(hwnd, IDC_STATIC_SENSOR_LOG_LIST_LABEL);
+    assert(g_label_logs_handle != nullptr);
+    g_lb_logs_handle = ::GetDlgItem(hwnd, IDC_LB_LOGS);
+    assert(g_lb_logs_handle != nullptr);
+    g_label_timestamp_handle = ::GetDlgItem(hwnd, IDC_STATIC_SENSOR_LOG_TIMESTAMP_LABEL);
+    assert(g_label_timestamp_handle != nullptr);
+    g_static_timestamp_handle = ::GetDlgItem(hwnd, IDC_STATIC_TIMESTAMP);
+    assert(g_static_timestamp_handle != nullptr);
+    g_datetime_start_date_handle = ::GetDlgItem(hwnd, IDC_DATETIMEPICKER_START_DATE);
+    assert(g_datetime_start_date_handle != nullptr);
+    g_datetime_start_time_handle = ::GetDlgItem(hwnd, IDC_DATETIMEPICKER_START_TIME);
+    assert(g_datetime_start_time_handle != nullptr);
+    g_button_load_handle = ::GetDlgItem(hwnd, IDC_BUTTON_LOAD_LOG);
+    assert(g_button_load_handle != nullptr);
+    g_lv_packets_handle = ::GetDlgItem(hwnd, IDC_LISTVIEW_PACKET_LIST);
+    assert(g_lv_packets_handle != nullptr);
+
+    // TODO: Query user for log folder
+    populate_log_list(log_location, g_lb_logs_handle);
+
+    // Set column(s) for the packet list view
+    LV_COLUMNW col {};
+    col.mask = LVCF_WIDTH | LVCF_TEXT;
+    col.cx = 70;
+    col.pszText = const_cast<wchar_t*>(L"Index");
+    ListView_InsertColumn(g_lv_packets_handle, packet_col::index, &col);
+
+    col.mask &= ~LVCF_WIDTH;
+    col.pszText = const_cast<wchar_t*>(L"Type");
+    ListView_InsertColumn(g_lv_packets_handle, packet_col::type, &col);
+
+    col.mask |= LVCF_FMT;
+    col.fmt = LVCFMT_RIGHT;
+    col.pszText = const_cast<wchar_t*>(L"Size");
+    ListView_InsertColumn(g_lv_packets_handle, packet_col::size, &col);
+    col.mask &= ~LVCF_FMT;
+
+    col.pszText = const_cast<wchar_t*>(L"Payload");
+    ListView_InsertColumn(g_lv_packets_handle, packet_col::payload, &col);
+    ListView_SetColumnWidth(g_lv_packets_handle, packet_col::payload, LVSCW_AUTOSIZE_USEHEADER);
+
+    col.pszText = const_cast<wchar_t*>(L"Details");
+    ListView_InsertColumn(g_lv_packets_handle, packet_col::details, &col);
+    ListView_SetColumnWidth(g_lv_packets_handle, packet_col::details, LVSCW_AUTOSIZE_USEHEADER);
+
+    // Make listview "full-row select"
+    ListView_SetExtendedListViewStyle(g_lv_packets_handle, LVS_EX_FULLROWSELECT);
+
+    // TEMP --- VVV --- Add a filter bar to the list view header
+    // TODO: Find out how to apply visual styles to filter bar (it does render, but looks funky).
+    // auto lv_header { ListView_GetHeader(lv_packets) };
+    // auto header_style { ::GetWindowLongPtrW(lv_header, GWL_STYLE) };
+    //::SetWindowLongPtrW(lv_header, GWL_STYLE, header_style | HDS_FILTERBAR);
+    // TEMP --- AAA
+
+    return TRUE;
+}
+
+
+static void OnSize(HWND const hwnd, UINT const /*state*/, int const cx, int const cy)
+{
+    arrange_controls(hwnd, cx, cy);
+    // Resize list view columns. Needs to be done in a WM_SIZE handler, otherwise the widths are based on
+    // the outdated control width.
+    set_packets_list_column_widths(g_lv_packets_handle);
+}
+
+
+static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
+{
+    switch (id)
     {
-    case WM_INITDIALOG: {
-        // Store window handles in globals for convenience
-        g_hDlg = hwndDlg;
-        g_hLBLogList = ::GetDlgItem(hwndDlg, IDC_LB_LOGS);
-        // TODO: Query user for log folder
-        populate_log_list(log_location, ::GetDlgItem(hwndDlg, IDC_LB_LOGS));
+    case IDC_LB_LOGS: {
+        switch (codeNotify)
+        {
+        case LBN_SELCHANGE:
+            auto const ft { ::update_sel_log_timestamp(g_lb_logs_handle, g_static_timestamp_handle) };
+            ::update_datetime_start(g_datetime_start_date_handle, g_datetime_start_time_handle, ft);
+            break;
 
-        // Set column(s) for the packet list view
-        auto lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
-        LV_COLUMNW col {};
-        col.mask = LVCF_WIDTH | LVCF_TEXT;
-        col.cx = 70;
-        col.pszText = const_cast<wchar_t*>(L"Index");
-        ListView_InsertColumn(lv_packets, packet_col::index, &col);
-
-        col.mask &= ~LVCF_WIDTH;
-        col.pszText = const_cast<wchar_t*>(L"Type");
-        ListView_InsertColumn(lv_packets, packet_col::type, &col);
-
-        col.mask |= LVCF_FMT;
-        col.fmt = LVCFMT_RIGHT;
-        col.pszText = const_cast<wchar_t*>(L"Size");
-        ListView_InsertColumn(lv_packets, packet_col::size, &col);
-        col.mask &= ~LVCF_FMT;
-
-        col.pszText = const_cast<wchar_t*>(L"Payload");
-        ListView_InsertColumn(lv_packets, packet_col::payload, &col);
-        ListView_SetColumnWidth(lv_packets, packet_col::payload, LVSCW_AUTOSIZE_USEHEADER);
-
-        col.pszText = const_cast<wchar_t*>(L"Details");
-        ListView_InsertColumn(lv_packets, packet_col::details, &col);
-        ListView_SetColumnWidth(lv_packets, packet_col::details, LVSCW_AUTOSIZE_USEHEADER);
-
-        // Make listview "full-row select"
-        ListView_SetExtendedListViewStyle(lv_packets, LVS_EX_FULLROWSELECT);
-
-        // TEMP --- VVV --- Add a filter bar to the list view header
-        // TODO: Find out how to apply visual styles to filter bar (it does render, but looks funky).
-        // auto lv_header { ListView_GetHeader(lv_packets) };
-        // auto header_style { ::GetWindowLongPtrW(lv_header, GWL_STYLE) };
-        //::SetWindowLongPtrW(lv_header, GWL_STYLE, header_style | HDS_FILTERBAR);
-        // TEMP --- AAA
-
-        return TRUE;
+        default:
+            break;
+        }
     }
 
-    case WM_SIZE: {
-        uint32_t const width_client { LOWORD(lParam) };
-        uint32_t const height_client { HIWORD(lParam) };
-        arrange_controls(hwndDlg, width_client, height_client);
-        // Resize list view columns. Needs to be done in a WM_SIZE handler, otherwise the widths are based on the
-        // outdated control width.
-        auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
-        auto const col_widths { ::std::array { ::std::make_pair(packet_col::type, LVSCW_AUTOSIZE_USEHEADER),
-                                               ::std::make_pair(packet_col::size, LVSCW_AUTOSIZE_USEHEADER),
-                                               ::std::make_pair(packet_col::payload, LVSCW_AUTOSIZE_USEHEADER),
-                                               ::std::make_pair(packet_col::details, LVSCW_AUTOSIZE_USEHEADER) } };
-        for (auto const [index, width] : col_widths)
+    case IDC_BUTTON_LOAD_LOG:
+        switch (codeNotify)
         {
-            ListView_SetColumnWidth(lv_packets, index, width);
-        }
-
-        return TRUE;
-    }
-
-    case WM_COMMAND: {
-        switch (LOWORD(wParam))
-        {
-        case IDC_LB_LOGS: {
-            switch (HIWORD(wParam))
+        case BN_CLICKED: {
+            auto const sel_index { static_cast<intptr_t>(::SendMessageW(g_lb_logs_handle, LB_GETCURSEL, 0, 0)) };
+            if (sel_index >= 0)
             {
-            case LBN_SELCHANGE: {
-                ::update_sel_log_timestamp(g_hDlg);
-                return TRUE;
-            }
+                auto const& dir_entry { *reinterpret_cast<fs::directory_entry const*>(
+                    ::SendMessageW(g_lb_logs_handle, LB_GETITEMDATA, sel_index, 0)) };
 
-            default:
-                break;
-            }
-        }
+                g_spModel.reset(new model(dir_entry.path().c_str()));
+                auto const packet_count { g_spModel->packet_count() };
 
-        case IDC_BUTTON_LOAD_LOG: {
-            switch (HIWORD(wParam))
-            {
-            case BN_CLICKED: {
-                auto const lb_logs { ::GetDlgItem(hwndDlg, IDC_LB_LOGS) };
-                auto const sel_index { static_cast<intptr_t>(::SendMessageW(lb_logs, LB_GETCURSEL, 0, 0)) };
-                if (sel_index >= 0)
-                {
-                    auto const& dir_entry { *reinterpret_cast<fs::directory_entry const*>(
-                        ::SendMessageW(lb_logs, LB_GETITEMDATA, sel_index, 0)) };
-
-                    g_spModel.reset(new model(dir_entry.path().c_str()));
-                    auto const packet_count { g_spModel->data().directory().size() };
-
-                    auto const lv_packets { ::GetDlgItem(hwndDlg, IDC_LISTVIEW_PACKET_LIST) };
-                    // Reset sorting indicators
-                    ::set_header_sorting(ListView_GetHeader(lv_packets));
-                    // Set virtual list view size
-                    ::SendMessageW(lv_packets, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count), 0x0);
-                }
-                return TRUE;
-            }
-
-            default:
-                break;
+                // Reset sorting indicators
+                ::set_header_sorting(ListView_GetHeader(g_lv_packets_handle));
+                // Set virtual list view size
+                ::SendMessageW(g_lv_packets_handle, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count), 0x0);
+                // Adjust packets list column widths. If we don't do this after setting the items count, a
+                // potentially appearing vertical scrollbar will not be accounted for.
+                set_packets_list_column_widths(g_lv_packets_handle);
             }
         }
 
         default:
             break;
         }
-        break;
     }
+}
+
+
+static void OnGetMinMaxInfo(HWND /*hwnd*/, LPMINMAXINFO lpMinMaxInfo)
+{
+    lpMinMaxInfo->ptMinTrackSize = POINT { 1200, 800 };
+}
+
+
+static void OnClose(HWND hwnd) { EndDialog(hwnd, 0); }
+
+
+#pragma endregion
+
+
+INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        return HANDLE_WM_INITDIALOG(hwndDlg, wParam, lParam, &::OnInitDialog);
+
+    case WM_SIZE:
+        HANDLE_WM_SIZE(hwndDlg, wParam, lParam, &::OnSize);
+        return TRUE;
+
+    case WM_COMMAND:
+        HANDLE_WM_COMMAND(hwndDlg, wParam, lParam, &::OnCommand);
+        return TRUE;
+
+    case WM_GETMINMAXINFO:
+        HANDLE_WM_GETMINMAXINFO(hwndDlg, wParam, lParam, &::OnGetMinMaxInfo);
+        return TRUE;
+
+    case WM_CLOSE:
+        HANDLE_WM_CLOSE(hwndDlg, wParam, lParam, &::OnClose);
+        return TRUE;
 
     case WM_NOTIFY: {
         auto const& nmhdr { *reinterpret_cast<NMHDR const*>(lParam) };
@@ -473,7 +587,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 switch (col_index)
                 {
                 case packet_col::index: {
-                    auto const mapped_index { g_spModel->data().sort_map()[item_index] };
+                    auto const mapped_index { g_spModel->packet_index(item_index) };
                     auto const index_str { ::std::to_wstring(mapped_index + 1) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, index_str.c_str(), index_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
@@ -481,22 +595,22 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 break;
 
                 case packet_col::type: {
-                    auto const type_str { ::to_hex_string(g_spModel->data().packet(item_index).type()) };
+                    auto const type_str { ::to_hex_string(g_spModel->packet(item_index).type()) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, type_str.c_str(), type_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;
 
                 case packet_col::size: {
-                    auto const size_str { ::std::to_wstring(g_spModel->data().packet(item_index).size()) };
+                    auto const size_str { ::std::to_wstring(g_spModel->packet(item_index).payload_size()) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, size_str.c_str(), size_str.size());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                 }
                 break;
 
                 case packet_col::payload: {
-                    auto payload_str { ::to_hex_string(g_spModel->data().packet(item_index).data() + 2,
-                                                       g_spModel->data().packet(item_index).size()) };
+                    auto payload_str { ::to_hex_string(g_spModel->packet(item_index).data() + 2,
+                                                       g_spModel->packet(item_index).payload_size()) };
                     // Truncate payload if it exceeds available space.
                     if (payload_str.size() >= nmlvdi.item.cchTextMax)
                     {
@@ -510,7 +624,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 break;
 
                 case packet_col::details: {
-                    auto const details { ::details_from_packet(g_spModel->data().packet(item_index),
+                    auto const details { ::details_from_packet(g_spModel->packet(item_index),
                                                                g_spModel->packet_descriptions()) };
                     auto details_str { details.value_or(L"n/a") };
                     // Truncate payload if it exceeds available space.
@@ -548,18 +662,18 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
             }
         }
 
+        if (nmhdr.idFrom == IDC_DATETIMEPICKER_START_DATE)
+        {
+            auto const code { nmhdr.code };
+#pragma warning(suppress : 26454)
+            if (code == DTN_DATETIMECHANGE)
+            {
+                // Control sends DTN_DATETIMECHANGE notification when toggling its integrated check box
+                sync_time_state_to_date_state(g_datetime_start_date_handle, g_datetime_start_time_handle);
+            }
+        }
+
         return FALSE;
-    }
-
-    case WM_GETMINMAXINFO: {
-        auto& info { *reinterpret_cast<MINMAXINFO*>(lParam) };
-        info.ptMinTrackSize = POINT { 1200, 800 };
-        return TRUE;
-    }
-
-    case WM_CLOSE: {
-        EndDialog(hwndDlg, 0);
-        return TRUE;
     }
 
     default:
@@ -573,7 +687,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE /*hPrevInstance*/, _In_ LPWSTR /*lpCmdLine*/,
                       _In_ int /*nCmdShow*/)
 {
-    INITCOMMONCONTROLSEX icc { static_cast<DWORD>(sizeof(icc)), ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES };
+    INITCOMMONCONTROLSEX icc { static_cast<DWORD>(sizeof(icc)),
+                               ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES | ICC_DATE_CLASSES };
     THROW_IF_WIN32_BOOL_FALSE(::InitCommonControlsEx(&icc));
 
     auto const result { ::DialogBoxParamW(hInstance, MAKEINTRESOURCEW(IDD_MAIN), nullptr, &::MainDlgProc, 0l) };

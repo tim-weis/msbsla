@@ -1,6 +1,7 @@
 #pragma once
 
 #include "char_encoding_utils.h"
+#include "date_time_utils.h"
 
 #include <nlohmann/json.hpp>
 #include <wil/resource.h>
@@ -18,7 +19,7 @@
 
 namespace
 {
-static constexpr auto const k_header_size { 2 };
+static constexpr size_t k_header_size { 2 };
 }
 
 
@@ -44,7 +45,8 @@ struct data_proxy
     data_proxy(unsigned char const* begin, unsigned char const* end) : begin_ { begin }, end_ { end } {}
     data_proxy(data_proxy const&) = default;
 
-    auto size() const noexcept { return ::std::distance(begin_, end_) - k_header_size; }
+    constexpr auto header_size() const noexcept { return k_header_size; }
+    auto payload_size() const noexcept { return ::std::distance(begin_, end_) - header_size(); }
     auto data() const noexcept { return begin_; };
     auto type() const noexcept { return *begin_; }
 
@@ -88,63 +90,9 @@ struct raw_data
             directory_.push_back({ current_pos, current_pos + size });
             current_pos += size;
         }
-
-        // Initialize identity mapping (i.e. no sorting)
-        sort_map_.resize(directory_.size());
-        ::std::iota(begin(sort_map_), end(sort_map_), 0);
     }
 
     auto const& directory() const noexcept { return directory_; }
-    auto const& sort_map() const noexcept
-    {
-        assert(sort_map_.size() == directory_.size());
-        return sort_map_;
-    }
-    // Returns packet at index applying the current sort map
-    auto const& packet(size_t const index) const noexcept
-    {
-        assert(index < sort_map_.size());
-        auto const mapped_index { sort_map_[index] };
-        assert(mapped_index < directory_.size());
-        return directory_[mapped_index];
-    }
-    // Apply sorting
-    // Defaults to natural sorting (sequential order as in the raw binary data)
-    void sort(sort_predicate const pred = sort_predicate::index, sort_direction const dir = sort_direction::asc)
-    {
-        // Initialize sort map
-        sort_map_.resize(directory_.size());
-        ::std::iota(begin(sort_map_), end(sort_map_), 0);
-        // Special-case sorting by index
-        switch (pred)
-        {
-        case sort_predicate::index:
-            if (dir == sort_direction::desc)
-            {
-                ::std::reverse(begin(sort_map_), end(sort_map_));
-            }
-            // Nothing to do for index/asc
-            break;
-
-        case sort_predicate::type:
-            ::std::stable_sort(begin(sort_map_), end(sort_map_), [&](size_t const lhs, size_t const rhs) {
-                return (dir == sort_direction::asc) ? directory_[lhs].type() < directory_[rhs].type()
-                                                    : directory_[lhs].type() > directory_[rhs].type();
-            });
-            break;
-
-        case sort_predicate::size:
-            ::std::stable_sort(begin(sort_map_), end(sort_map_), [&](size_t const lhs, size_t const rhs) {
-                return (dir == sort_direction::asc) ? directory_[lhs].size() < directory_[rhs].size()
-                                                    : directory_[lhs].size() > directory_[rhs].size();
-            });
-            break;
-
-        default:
-            assert(!"Unexpected sort_predicate; update this method whenever sort_predicate changes.");
-            break;
-        }
-    }
 
 private:
     // std::wstring path_name_;
@@ -152,8 +100,6 @@ private:
     unsigned char const* memory_begin_;
     unsigned char const* memory_end_;
     ::std::vector<data_proxy> directory_;
-    // Mapping for sorting; each element sort_map_[n] stores the index into the directory, given the current sorting.
-    ::std::vector<size_t> sort_map_;
 };
 
 
@@ -162,6 +108,7 @@ enum struct payload_type
 {
     unknown,
     ui8,
+    ui16,
     ui32,
     file_time,
 
@@ -182,7 +129,7 @@ struct packet_description
 {
     ::std::optional<::std::wstring> name;
     // TODO: Add field to allow users to provide a confidence level (unknown .. known beyond doubt)
-    payload_elements_container elements;
+    ::payload_elements_container elements;
 };
 
 using payload_container = ::std::map<unsigned char, ::packet_description>;
@@ -190,6 +137,7 @@ using payload_container = ::std::map<unsigned char, ::packet_description>;
 
 NLOHMANN_JSON_SERIALIZE_ENUM(::payload_type, { { ::payload_type::unknown, nullptr },
                                                { ::payload_type::ui8, "ui8" },
+                                               { ::payload_type::ui16, "ui16" },
                                                { ::payload_type::ui32, "ui32" },
                                                { ::payload_type::file_time, "file_time" } })
 
@@ -199,6 +147,47 @@ struct model
 {
     explicit model(wchar_t const* path_name) : data_ { path_name }
     {
+        // Initialize filter
+        filter_.resize(data_.directory().size());
+        ::std::iota(begin(filter_), end(filter_), 0);
+
+        // TEMP --- VVV --- Filtering on a specific date/time range
+        // auto const tp_from { ::to_uint(::to_filetime(2019, 5, 30, 6, 0, 0)) };
+        // auto const tp_to { ::to_uint(::to_filetime(2019, 5, 30, 7, 0, 0)) };
+
+        // size_t index_from { 0 };
+        // size_t index_to { data_.directory().size() };
+
+        // size_t index_current { 0 };
+        // for (auto const& packet : data_.directory())
+        //{
+        //    // Filter on [TIMESTAMP] packets only for now
+        //    if (packet.type() == 0x0)
+        //    {
+        //        auto const time_stamp { *reinterpret_cast<uint64_t const*>(packet.data() + packet.header_size()) };
+
+        //        if (time_stamp < tp_from)
+        //        {
+        //            index_from = index_current;
+        //        }
+
+        //        if (time_stamp >= tp_to)
+        //        {
+        //            index_to = index_current;
+        //            break;
+        //        }
+        //    }
+
+        //    ++index_current;
+        //}
+
+        // filter_.resize(index_to - index_from);
+        //::std::iota(begin(filter_), end(filter_), index_from);
+        // TEMP --- AAA
+
+        // Initialize sort mapping
+        sort_map_ = filter_;
+
         // Read (known) packet descriptions from JSON file. The JSON file needs to have the following layout:
 
         // { "descriptions": [
@@ -207,7 +196,7 @@ struct model
         //     "elements": [
         //       { "offset": 0,     /* offset: number */
         //         "length": 8,     /* length: number */
-        //         "display_type": "file_time",     /* display_type: string (serialized ::payload_type enumeration */
+        //         "display_type": "file_time",     /* display_type: string (serialized ::payload_type enumeration) */
         //         "comment": "<some comment>"      /* comment: string (optional) */
         //       },
         //       ...
@@ -247,11 +236,72 @@ struct model
         }
     }
 
-    auto& data() noexcept { return data_; }
-    auto const& data() const noexcept { return data_; }
+    // Returns packet at index applying the current sort map
+    auto const& packet(size_t const index) const noexcept
+    {
+        assert(index < sort_map_.size());
+        auto const mapped_index { sort_map_[index] };
+        assert(mapped_index < data_.directory().size());
+        return data_.directory()[mapped_index];
+    }
+
+    // Returns the mapped index (after filtering and sorting is applied)
+    auto packet_index(size_t const index) const noexcept
+    {
+        assert(index < sort_map_.size());
+        return sort_map_[index];
+    }
+
+    auto packet_count() const noexcept { return sort_map_.size(); }
+
+    // auto& data() noexcept { return data_; }
+    // auto const& data() const noexcept { return data_; }
     auto const& packet_descriptions() const noexcept { return packet_descriptions_; }
+
+    // Apply sorting
+    // Defaults to natural sorting (sequential order as in the raw binary data)
+    void sort(sort_predicate const pred = sort_predicate::index, sort_direction const dir = sort_direction::asc)
+    {
+        assert(filter_.size() > 0 && filter_.size() <= data_.directory().size());
+        // Initialize sort map
+        sort_map_ = filter_;
+        // Special-case sorting by index
+        switch (pred)
+        {
+        case sort_predicate::index:
+            if (dir == sort_direction::desc)
+            {
+                ::std::reverse(begin(sort_map_), end(sort_map_));
+            }
+            // Nothing to do for index/asc
+            break;
+
+        case sort_predicate::type:
+            ::std::stable_sort(begin(sort_map_), end(sort_map_), [&](size_t const lhs, size_t const rhs) {
+                return (dir == sort_direction::asc) ? data_.directory()[lhs].type() < data_.directory()[rhs].type()
+                                                    : data_.directory()[lhs].type() > data_.directory()[rhs].type();
+            });
+            break;
+
+        case sort_predicate::size:
+            ::std::stable_sort(begin(sort_map_), end(sort_map_), [&](size_t const lhs, size_t const rhs) {
+                return (dir == sort_direction::asc)
+                           ? data_.directory()[lhs].payload_size() < data_.directory()[rhs].payload_size()
+                           : data_.directory()[lhs].payload_size() > data_.directory()[rhs].payload_size();
+            });
+            break;
+
+        default:
+            assert(!"Unexpected sort_predicate; update this method whenever sort_predicate changes.");
+            break;
+        }
+    }
 
 private:
     raw_data data_;
     payload_container packet_descriptions_;
+    // Sorted (and filtered) index container
+    ::std::vector<size_t> sort_map_;
+    // Filtered index container (this will be used for sorting again)
+    ::std::vector<size_t> filter_;
 };
