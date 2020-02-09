@@ -14,13 +14,8 @@
 #include <numeric>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
-
-
-namespace
-{
-static constexpr size_t k_header_size { 2 };
-}
 
 
 // Enums to control sorting
@@ -45,9 +40,16 @@ struct data_proxy
     data_proxy(unsigned char const* begin, unsigned char const* end) : begin_ { begin }, end_ { end } {}
     data_proxy(data_proxy const&) = default;
 
-    constexpr auto header_size() const noexcept { return k_header_size; }
+    constexpr auto header_size() const noexcept { return sizeof(unsigned char) + sizeof(unsigned char); }
     auto payload_size() const noexcept { return ::std::distance(begin_, end_) - header_size(); }
     auto data() const noexcept { return begin_; };
+    // Return typed value at specific offset. The offset is relative to the payload.
+    template <typename T>
+    std::add_const_t<T> value(size_t const offset) const noexcept
+    {
+        assert(offset + sizeof(T) <= payload_size());
+        return *reinterpret_cast<std::add_const_t<T>*>(begin_ + /*header_size()*/ 2 + offset);
+    }
     auto type() const noexcept { return *begin_; }
 
 private:

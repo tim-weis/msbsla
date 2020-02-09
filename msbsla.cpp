@@ -22,7 +22,7 @@
 #include <wchar.h>
 
 
-namespace fs = std::filesystem;
+namespace fs = ::std::filesystem;
 
 
 // Enable Visual Styles by embedding an appropriate manifest
@@ -42,7 +42,13 @@ enum class packet_col
     last_value = details
 };
 
+
+// Constants
+constexpr auto k_diagram_height { 120 };
+
+
 // Local data
+static HWND g_main_dlg_handle { nullptr };
 static HWND g_label_logs_handle { nullptr };
 static HWND g_lb_logs_handle { nullptr };
 static HWND g_label_timestamp_handle { nullptr };
@@ -51,6 +57,8 @@ static HWND g_datetime_start_date_handle { nullptr };
 static HWND g_datetime_start_time_handle { nullptr };
 static HWND g_button_load_handle { nullptr };
 static HWND g_lv_packets_handle { nullptr };
+
+static RECT g_rc_diagram {};
 
 ::std::unique_ptr<model> g_spModel { nullptr };
 
@@ -391,9 +399,15 @@ static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t heig
     RECT rc_packets { .left = margin_x,
                       .top = rc_logs.bottom + space_y_unrelated,
                       .right = width_client - margin_x,
-                      .bottom = height_client - margin_y };
+                      .bottom = height_client - margin_y - k_diagram_height - space_y_related };
     ::SetWindowPos(g_lv_packets_handle, nullptr, rc_packets.left, rc_packets.top, ::width(rc_packets),
                    ::height(rc_packets), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Update rectangle for diagram area
+    g_rc_diagram = RECT { .left = rc_packets.left,
+                          .top = rc_packets.bottom + space_y_related,
+                          .right = rc_packets.right,
+                          .bottom = height_client - margin_y };
 }
 
 
@@ -406,6 +420,59 @@ void set_packets_list_column_widths(HWND const packets_list)
     for (auto const [index, width] : col_widths)
     {
         ListView_SetColumnWidth(packets_list, index, width);
+    }
+}
+
+
+template <typename T>
+void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model const& m,
+                  unsigned char const packet_type, size_t const offset) noexcept
+{
+    ::std::vector<size_t> indexes {};
+    for (size_t i { 0 }; i < m.packet_count(); ++i)
+    {
+        if (m.packet(i).type() == packet_type)
+        {
+            indexes.push_back(i);
+        }
+    }
+
+    if (indexes.size() > 0)
+    {
+        // Find min/max values
+        auto [min_it, max_it] { ::std::minmax_element(begin(indexes), end(indexes),
+                                                      [& m = m, offset](auto const lhs, auto const rhs) {
+                                                          auto const val_lhs { m.packet(lhs).value<T>(offset) };
+                                                          auto const val_rhs { m.packet(rhs).value<T>(offset) };
+
+                                                          return val_lhs < val_rhs;
+                                                      }) };
+        auto const min_val { m.packet(*min_it).value<T>(offset) };
+        auto const max_val { m.packet(*max_it).value<T>(offset) };
+
+        // Render graph
+        auto const w { ::width(rect) - 2 };
+        auto const h { ::height(rect) - 2 };
+        auto const value_range { max_val - min_val };
+
+        auto x { rect.left + 1 + ::MulDiv(static_cast<int>(indexes[0]), w, static_cast<int>(m.packet_count())) };
+        auto val { m.packet(indexes[0]).value<T>(offset) };
+        auto y { rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range) };
+        ::MoveToEx(hdc, x, y, nullptr);
+
+        auto const pen { ::CreatePen(PS_SOLID, 0, color) };
+        auto const prev_pen { SelectPen(hdc, pen) };
+
+        for (size_t i { 1 }; i < indexes.size(); ++i)
+        {
+            x = rect.left + 1 + ::MulDiv(static_cast<int>(indexes[i]), w, static_cast<int>(m.packet_count()));
+            val = m.packet(indexes[i]).value<T>(offset);
+            y = rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range);
+            ::LineTo(hdc, x, y);
+        }
+
+        SelectPen(hdc, prev_pen);
+        ::DeleteObject(pen);
     }
 }
 
@@ -423,6 +490,8 @@ auto const& log_location {
 BOOL OnInitDialog(HWND hwnd, HWND /*hwndFocus*/, LPARAM /*lParam*/)
 {
     // Store window handles in globals for convenience
+    g_main_dlg_handle = hwnd;
+    assert(g_main_dlg_handle != nullptr);
     g_label_logs_handle = ::GetDlgItem(hwnd, IDC_STATIC_SENSOR_LOG_LIST_LABEL);
     assert(g_label_logs_handle != nullptr);
     g_lb_logs_handle = ::GetDlgItem(hwnd, IDC_LB_LOGS);
@@ -491,6 +560,34 @@ static void OnSize(HWND const hwnd, UINT const /*state*/, int const cx, int cons
 }
 
 
+static void OnPaint(HWND hwnd)
+{
+    PAINTSTRUCT ps {};
+    auto const hdc { ::BeginPaint(hwnd, &ps) };
+
+    auto prev_pen { SelectPen(hdc, static_cast<HPEN const>(::GetStockObject(BLACK_PEN))) };
+    auto prev_brush { SelectBrush(hdc, static_cast<HBRUSH const>(::GetStockObject(WHITE_BRUSH))) };
+
+    ::Rectangle(hdc, g_rc_diagram.left, g_rc_diagram.top, g_rc_diagram.right, g_rc_diagram.bottom);
+
+    SelectBrush(hdc, prev_brush);
+    SelectPen(hdc, prev_pen);
+
+    if (g_spModel)
+    {
+        // Unknown data
+        render_graph<uint16_t>(hdc, g_rc_diagram, RGB(0, 162, 232), *g_spModel, 0x42, 0);
+        // Heart rate
+        render_graph<uint8_t>(hdc, g_rc_diagram, RGB(210, 0, 0), *g_spModel, 0x80, 0);
+        render_graph<uint8_t>(hdc, g_rc_diagram, RGB(252, 209, 211), *g_spModel, 0x80, 1);
+        // Unknown data (apparently some cumulative sum)
+        render_graph<uint32_t>(hdc, g_rc_diagram, RGB(0, 220, 0), *g_spModel, 0x81, 0);
+    }
+
+    ::EndPaint(hwnd, &ps);
+}
+
+
 static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
 {
     switch (id)
@@ -528,6 +625,9 @@ static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
                 // Adjust packets list column widths. If we don't do this after setting the items count, a
                 // potentially appearing vertical scrollbar will not be accounted for.
                 set_packets_list_column_widths(g_lv_packets_handle);
+
+                // Redraw diagram
+                ::InvalidateRect(g_main_dlg_handle, &g_rc_diagram, FALSE);
             }
         }
 
@@ -559,6 +659,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 
     case WM_SIZE:
         HANDLE_WM_SIZE(hwndDlg, wParam, lParam, &::OnSize);
+        return TRUE;
+
+    case WM_PAINT:
+        HANDLE_WM_PAINT(hwndDlg, wParam, lParam, &::OnPaint);
         return TRUE;
 
     case WM_COMMAND:
