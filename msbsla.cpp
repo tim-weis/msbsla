@@ -338,7 +338,18 @@ static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t heig
 }
 
 
-void set_packets_list_column_widths(HWND const packets_list)
+static void set_log_list_column_widths(HWND const log_list)
+{
+    auto const col_widths { ::std::array { ::std::make_pair(0, LVSCW_AUTOSIZE),
+                                           ::std::make_pair(1, LVSCW_AUTOSIZE_USEHEADER) } };
+    for (auto const [index, width] : col_widths)
+    {
+        ListView_SetColumnWidth(log_list, index, width);
+    }
+}
+
+
+static void set_packets_list_column_widths(HWND const packets_list)
 {
     auto const col_widths { ::std::array { ::std::make_pair(packet_col::type, LVSCW_AUTOSIZE_USEHEADER),
                                            ::std::make_pair(packet_col::size, LVSCW_AUTOSIZE_USEHEADER),
@@ -490,6 +501,7 @@ static void OnSize(HWND const hwnd, UINT const /*state*/, int const cx, int cons
     // Resize list view columns. Needs to be done in a WM_SIZE handler, otherwise the widths are based on
     // the outdated control width.
     set_packets_list_column_widths(g_lv_packets_handle);
+    set_log_list_column_widths(g_lv_logs_handle);
 }
 
 
@@ -525,19 +537,6 @@ static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
 {
     switch (id)
     {
-        // case IDC_LISTVIEW_LOGS: {
-        //    switch (codeNotify)
-        //    {
-        //    case LBN_SELCHANGE:
-        //        auto const ft { ::update_sel_log_timestamp(g_lv_logs_handle, g_static_timestamp_handle) };
-        //        ::update_datetime_start(g_datetime_start_date_handle, g_datetime_start_time_handle, ft);
-        //        break;
-
-        //    default:
-        //        break;
-        //    }
-        //}
-
     case IDC_BUTTON_LOAD_LOG:
         switch (codeNotify)
         {
@@ -565,6 +564,7 @@ static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
                 // Redraw diagram
                 ::InvalidateRect(g_main_dlg_handle, &g_rc_diagram, FALSE);
             }
+            break;
         }
 
         default:
