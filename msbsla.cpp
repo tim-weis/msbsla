@@ -50,11 +50,7 @@ constexpr auto k_diagram_height { 120 };
 // Local data
 static HWND g_main_dlg_handle { nullptr };
 static HWND g_label_logs_handle { nullptr };
-static HWND g_lb_logs_handle { nullptr };
-static HWND g_label_timestamp_handle { nullptr };
-static HWND g_static_timestamp_handle { nullptr };
-static HWND g_datetime_start_date_handle { nullptr };
-static HWND g_datetime_start_time_handle { nullptr };
+static HWND g_lv_logs_handle { nullptr };
 static HWND g_button_load_handle { nullptr };
 static HWND g_lv_packets_handle { nullptr };
 
@@ -63,94 +59,54 @@ static RECT g_rc_diagram {};
 ::std::unique_ptr<model> g_spModel { nullptr };
 
 
-// Local functions
-static void clear_log_list(HWND list_box)
+struct log_info
 {
-    intptr_t const count { ::SendMessageW(list_box, LB_GETCOUNT, 0, 0) };
+    fs::directory_entry file_path;
+    ::FILETIME timestamp;
+};
+
+
+// Local functions
+static void clear_log_list(HWND list_view)
+{
+    auto const count { ListView_GetItemCount(list_view) };
     // Delete associated data
-    for (intptr_t index { 0 }; index < count; ++index)
+    for (auto index { 0 }; index < count; ++index)
     {
-        auto p { reinterpret_cast<fs::directory_entry*>(::SendMessageW(list_box, LB_GETITEMDATA, index, 0)) };
+        LVITEMW lvi {};
+        lvi.mask = LVIF_PARAM;
+        lvi.iItem = 0;
+        ListView_GetItem(list_view, &lvi);
+        auto p { reinterpret_cast<log_info*>(lvi.lParam) };
         delete p;
     }
-    // Remove all content
-    ::SendMessageW(list_box, LB_RESETCONTENT, 0, 0);
+
+    ListView_DeleteAllItems(list_view);
 }
 
-static void populate_log_list(wchar_t const* log_dir, HWND list_box)
+static void populate_log_list(wchar_t const* log_dir, HWND list_view)
 {
+    auto item_index { 0 };
+
     auto it { fs::directory_iterator(log_dir) };
     for (auto file_path : it)
     {
         if (file_path.path().extension() == L".bin")
         {
-            intptr_t index { ::SendMessageW(list_box, LB_ADDSTRING, 0,
-                                            reinterpret_cast<LPARAM>(file_path.path().filename().c_str())) };
-            if (index >= 0)
-            {
-                auto p { new fs::directory_entry { file_path } };
-                ::SendMessageW(list_box, LB_SETITEMDATA, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(p));
-            }
+            auto filename { file_path.path().filename() };
+
+            ::LVITEMW lvi {};
+            lvi.mask = LVIF_TEXT | LVIF_PARAM;
+            lvi.iItem = item_index;
+            lvi.pszText = LPSTR_TEXTCALLBACK;
+            lvi.lParam
+                = reinterpret_cast<LPARAM>(new log_info { file_path, get_start_timestamp(file_path.path().c_str()) });
+
+            ListView_InsertItem(list_view, &lvi);
+
+            ++item_index;
         }
     }
-}
-
-
-static FILETIME update_sel_log_timestamp(HWND const log_list_handle, HWND const static_timestamp_handle)
-{
-    assert(log_list_handle != nullptr);
-    assert(static_timestamp_handle != nullptr);
-
-    FILETIME ft { ::invalid_filetime() };
-
-    intptr_t sel_index { ::SendMessageW(log_list_handle, LB_GETCURSEL, 0, 0) };
-    if (sel_index >= 0)
-    {
-        auto entry { reinterpret_cast<fs::directory_entry const*>(
-            ::SendMessageW(g_lb_logs_handle, LB_GETITEMDATA, sel_index, 0)) };
-        ft = get_start_timestamp(entry->path().c_str());
-        auto const formatted_timestamp { ::format_timestamp(ft) };
-        ::SetWindowTextW(static_timestamp_handle, formatted_timestamp.c_str());
-    }
-    else
-    {
-        // No item selected
-        ::SetWindowTextW(static_timestamp_handle, L"");
-    }
-
-    return ft;
-}
-
-
-// Synchronizes the accompanying time control to the state of the date control. The state can be changed by clicking the
-// embedded checkbox.
-static void sync_time_state_to_date_state(HWND const date_ctrl, HWND const time_ctrl)
-{
-    DATETIMEPICKERINFO dti { .cbSize = sizeof(dti) };
-    DateTime_GetDateTimePickerInfo(date_ctrl, &dti);
-
-    auto is_enabled { (dti.stateCheck & STATE_SYSTEM_CHECKED) != 0 };
-    ::EnableWindow(time_ctrl, { is_enabled });
-}
-
-
-static void update_datetime_start(HWND const date_ctrl, HWND const time_ctrl, ::FILETIME const ft)
-{
-    if (ft == ::invalid_filetime())
-    {
-        DateTime_SetSystemtime(date_ctrl, GDT_NONE, nullptr);
-        DateTime_SetSystemtime(time_ctrl, GDT_NONE, nullptr);
-    }
-    else
-    {
-        auto const st { ::to_systemtime(ft) };
-        DateTime_SetSystemtime(date_ctrl, GDT_VALID, &st);
-        DateTime_SetSystemtime(time_ctrl, GDT_VALID, &st);
-    }
-
-    // This may have changed the 'enabled' state of the date control, so we need to synchronize the accompanying time
-    // control.
-    ::sync_time_state_to_date_state(date_ctrl, time_ctrl);
 }
 
 
@@ -353,41 +309,12 @@ static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t heig
     static constexpr auto const log_list_height { 320 };
     RECT rc_logs { .left = 0, .top = 0, .right = log_list_width, .bottom = log_list_height };
     ::OffsetRect(&rc_logs, rc_logs_label.left, rc_logs_label.bottom + space_y_related);
-    ::SetWindowPos(g_lb_logs_handle, nullptr, rc_logs.left, rc_logs.top, ::width(rc_logs), ::height(rc_logs),
+    ::SetWindowPos(g_lv_logs_handle, nullptr, rc_logs.left, rc_logs.top, ::width(rc_logs), ::height(rc_logs),
                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
-
-    // Position sensor log information label
-    auto rc_log_ts_label { ::window_rect_in_client_coords(dlg_handle, g_label_timestamp_handle) };
-    ::OffsetRect(&rc_log_ts_label, rc_logs.right + margin_y - rc_log_ts_label.left, rc_logs.top - rc_log_ts_label.top);
-    ::SetWindowPos(g_label_timestamp_handle, nullptr, rc_log_ts_label.left, rc_log_ts_label.top,
-                   ::width(rc_log_ts_label), ::height(rc_log_ts_label),
-                   SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
-
-    // Position sensor log timestamp
-    auto rc_log_ts { ::window_rect_in_client_coords(dlg_handle, g_static_timestamp_handle) };
-    ::OffsetRect(&rc_log_ts, rc_log_ts_label.left - rc_log_ts.left,
-                 rc_log_ts_label.bottom + space_y_related - rc_log_ts.top);
-    ::SetWindowPos(g_static_timestamp_handle, nullptr, rc_log_ts.left, rc_log_ts.top, ::width(rc_log_ts),
-                   ::height(rc_log_ts), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
-
-    // Position date-time picker (start date)
-    auto rc_date_start { ::window_rect_in_client_coords(dlg_handle, g_datetime_start_date_handle) };
-    ::OffsetRect(&rc_date_start, rc_log_ts.left - rc_date_start.left,
-                 rc_log_ts.bottom + space_y_unrelated - rc_date_start.top);
-    ::SetWindowPos(g_datetime_start_date_handle, nullptr, rc_date_start.left, rc_date_start.top, ::width(rc_date_start),
-                   ::height(rc_date_start), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
-
-    // Position date-time picker (start time)
-    auto rc_time_start { ::window_rect_in_client_coords(dlg_handle, g_datetime_start_time_handle) };
-    // TODO: Verify whether 'margin_x' is the correct spacing
-    ::OffsetRect(&rc_time_start, rc_date_start.right + margin_x - rc_time_start.left,
-                 rc_date_start.top - rc_time_start.top);
-    ::SetWindowPos(g_datetime_start_time_handle, nullptr, rc_time_start.left, rc_time_start.top, ::width(rc_time_start),
-                   ::height(rc_time_start), SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
     // Position "Load" button
     auto rc_load { ::window_rect_in_client_coords(dlg_handle, g_button_load_handle) };
-    ::OffsetRect(&rc_load, rc_log_ts_label.left - rc_load.left, rc_logs.bottom - rc_load.bottom);
+    ::OffsetRect(&rc_load, rc_logs.right + margin_y - rc_load.left, rc_logs.bottom - rc_load.bottom);
     ::SetWindowPos(g_button_load_handle, nullptr, rc_load.left, rc_load.top, ::width(rc_load), ::height(rc_load),
                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
@@ -494,23 +421,29 @@ BOOL OnInitDialog(HWND hwnd, HWND /*hwndFocus*/, LPARAM /*lParam*/)
     assert(g_main_dlg_handle != nullptr);
     g_label_logs_handle = ::GetDlgItem(hwnd, IDC_STATIC_SENSOR_LOG_LIST_LABEL);
     assert(g_label_logs_handle != nullptr);
-    g_lb_logs_handle = ::GetDlgItem(hwnd, IDC_LB_LOGS);
-    assert(g_lb_logs_handle != nullptr);
-    g_label_timestamp_handle = ::GetDlgItem(hwnd, IDC_STATIC_SENSOR_LOG_TIMESTAMP_LABEL);
-    assert(g_label_timestamp_handle != nullptr);
-    g_static_timestamp_handle = ::GetDlgItem(hwnd, IDC_STATIC_TIMESTAMP);
-    assert(g_static_timestamp_handle != nullptr);
-    g_datetime_start_date_handle = ::GetDlgItem(hwnd, IDC_DATETIMEPICKER_START_DATE);
-    assert(g_datetime_start_date_handle != nullptr);
-    g_datetime_start_time_handle = ::GetDlgItem(hwnd, IDC_DATETIMEPICKER_START_TIME);
-    assert(g_datetime_start_time_handle != nullptr);
+    g_lv_logs_handle = ::GetDlgItem(hwnd, IDC_LISTVIEW_LOGS);
+    assert(g_lv_logs_handle != nullptr);
     g_button_load_handle = ::GetDlgItem(hwnd, IDC_BUTTON_LOAD_LOG);
     assert(g_button_load_handle != nullptr);
     g_lv_packets_handle = ::GetDlgItem(hwnd, IDC_LISTVIEW_PACKET_LIST);
     assert(g_lv_packets_handle != nullptr);
 
     // TODO: Query user for log folder
-    populate_log_list(log_location, g_lb_logs_handle);
+    populate_log_list(log_location, g_lv_logs_handle);
+
+    // Set column(s) for logs list view
+    LV_COLUMNW lvc {};
+    lvc.mask = LVCF_TEXT;
+    lvc.pszText = const_cast<wchar_t*>(L"Filename");
+    ListView_InsertColumn(g_lv_logs_handle, 0, &lvc);
+    ListView_SetColumnWidth(g_lv_logs_handle, 0, LVSCW_AUTOSIZE);
+
+    lvc.pszText = const_cast<wchar_t*>(L"Timestamp");
+    ListView_InsertColumn(g_lv_logs_handle, 1, &lvc);
+    ListView_SetColumnWidth(g_lv_logs_handle, 1, LVSCW_AUTOSIZE_USEHEADER);
+
+    ListView_SetExtendedListViewStyle(g_lv_logs_handle, LVS_EX_FULLROWSELECT);
+
 
     // Set column(s) for the packet list view
     LV_COLUMNW col {};
@@ -592,30 +525,33 @@ static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
 {
     switch (id)
     {
-    case IDC_LB_LOGS: {
-        switch (codeNotify)
-        {
-        case LBN_SELCHANGE:
-            auto const ft { ::update_sel_log_timestamp(g_lb_logs_handle, g_static_timestamp_handle) };
-            ::update_datetime_start(g_datetime_start_date_handle, g_datetime_start_time_handle, ft);
-            break;
+        // case IDC_LISTVIEW_LOGS: {
+        //    switch (codeNotify)
+        //    {
+        //    case LBN_SELCHANGE:
+        //        auto const ft { ::update_sel_log_timestamp(g_lv_logs_handle, g_static_timestamp_handle) };
+        //        ::update_datetime_start(g_datetime_start_date_handle, g_datetime_start_time_handle, ft);
+        //        break;
 
-        default:
-            break;
-        }
-    }
+        //    default:
+        //        break;
+        //    }
+        //}
 
     case IDC_BUTTON_LOAD_LOG:
         switch (codeNotify)
         {
         case BN_CLICKED: {
-            auto const sel_index { static_cast<intptr_t>(::SendMessageW(g_lb_logs_handle, LB_GETCURSEL, 0, 0)) };
+            auto const sel_index { ListView_GetNextItem(g_lv_logs_handle, -1, LVNI_SELECTED) };
             if (sel_index >= 0)
             {
-                auto const& dir_entry { *reinterpret_cast<fs::directory_entry const*>(
-                    ::SendMessageW(g_lb_logs_handle, LB_GETITEMDATA, sel_index, 0)) };
+                LVITEMW lvi {};
+                lvi.mask = LVIF_PARAM;
+                lvi.iItem = sel_index;
+                ListView_GetItem(g_lv_logs_handle, &lvi);
+                auto const& info { *reinterpret_cast<log_info const*>(lvi.lParam) };
 
-                g_spModel.reset(new model(dir_entry.path().c_str()));
+                g_spModel.reset(new model(info.file_path.path().c_str()));
                 auto const packet_count { g_spModel->packet_count() };
 
                 // Reset sorting indicators
@@ -766,16 +702,45 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
             }
         }
 
-        if (nmhdr.idFrom == IDC_DATETIMEPICKER_START_DATE)
-        {
-            auto const code { nmhdr.code };
 #pragma warning(suppress : 26454)
-            if (code == DTN_DATETIMECHANGE)
+        if (nmhdr.idFrom == IDC_LISTVIEW_LOGS && nmhdr.code == LVN_GETDISPINFOW)
+        {
+            auto& nmlvdi { *reinterpret_cast<NMLVDISPINFOW*>(lParam) };
+            if (nmlvdi.item.mask & LVIF_TEXT)
             {
-                // Control sends DTN_DATETIMECHANGE notification when toggling its integrated check box
-                sync_time_state_to_date_state(g_datetime_start_date_handle, g_datetime_start_time_handle);
+                LVITEMW lvi {};
+                lvi.mask = LVIF_PARAM;
+                lvi.iItem = nmlvdi.item.iItem;
+                ListView_GetItem(nmhdr.hwndFrom, &lvi);
+                auto const& info { *reinterpret_cast<log_info const*>(lvi.lParam) };
+
+                switch (nmlvdi.item.iSubItem)
+                {
+                case 0: {
+                    ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, info.file_path.path().filename().c_str(),
+                                ::wcslen(info.file_path.path().filename().c_str()));
+                    // Don't ask again
+                    nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                    break;
+                }
+
+                case 1: {
+                    auto const text { format_timestamp(info.timestamp) };
+                    ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, text.c_str(), text.length());
+                    nmlvdi.item.mask |= LVIF_DI_SETITEM;
+                    break;
+                }
+
+                default:
+                    assert(!"Unexpected column; update code to account for additional column.");
+                    break;
+                }
+
+
+                return TRUE;
             }
         }
+
 
         return FALSE;
     }
