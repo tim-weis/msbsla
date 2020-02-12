@@ -2,6 +2,7 @@
 
 #include "framework.h"
 
+#include "control_utils.h"
 #include "display_utils.h"
 #include "log_utils.h"
 #include "model.h"
@@ -69,6 +70,8 @@ struct log_info
 // Local functions
 static void clear_log_list(HWND list_view)
 {
+    assert(is_list_view(list_view));
+
     auto const count { ListView_GetItemCount(list_view) };
     // Delete associated data
     for (auto index { 0 }; index < count; ++index)
@@ -86,6 +89,8 @@ static void clear_log_list(HWND list_view)
 
 static void populate_log_list(wchar_t const* log_dir, HWND list_view)
 {
+    assert(is_list_view(list_view));
+
     auto item_index { 0 };
 
     auto it { fs::directory_iterator(log_dir) };
@@ -393,24 +398,27 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
         auto const h { ::height(rect) - 2 };
         auto const value_range { max_val - min_val };
 
-        auto x { rect.left + 1 + ::MulDiv(static_cast<int>(indexes[0]), w, static_cast<int>(m.packet_count())) };
-        auto val { m.packet(indexes[0]).value<T>(offset) };
-        auto y { rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range) };
-        ::MoveToEx(hdc, x, y, nullptr);
-
-        auto const pen { ::CreatePen(PS_SOLID, 0, color) };
-        auto const prev_pen { SelectPen(hdc, pen) };
-
-        for (size_t i { 1 }; i < indexes.size(); ++i)
+        if (value_range != 0)
         {
-            x = rect.left + 1 + ::MulDiv(static_cast<int>(indexes[i]), w, static_cast<int>(m.packet_count()));
-            val = m.packet(indexes[i]).value<T>(offset);
-            y = rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range);
-            ::LineTo(hdc, x, y);
-        }
+            auto x { rect.left + 1 + ::MulDiv(static_cast<int>(indexes[0]), w, static_cast<int>(m.packet_count())) };
+            auto val { m.packet(indexes[0]).value<T>(offset) };
+            auto y { rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range) };
+            ::MoveToEx(hdc, x, y, nullptr);
 
-        SelectPen(hdc, prev_pen);
-        ::DeleteObject(pen);
+            auto const pen { ::CreatePen(PS_SOLID, 0, color) };
+            auto const prev_pen { SelectPen(hdc, pen) };
+
+            for (size_t i { 1 }; i < indexes.size(); ++i)
+            {
+                x = rect.left + 1 + ::MulDiv(static_cast<int>(indexes[i]), w, static_cast<int>(m.packet_count()));
+                val = m.packet(indexes[i]).value<T>(offset);
+                y = rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range);
+                ::LineTo(hdc, x, y);
+            }
+
+            SelectPen(hdc, prev_pen);
+            ::DeleteObject(pen);
+        }
     }
 }
 
@@ -574,6 +582,24 @@ static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
 }
 
 
+static void OnLButtonDown(HWND /*hwnd*/, BOOL /*fDoubleClick*/, int x, int y, UINT /*keyFlags*/)
+{
+    POINT const pt { x, y };
+    if (::PtInRect(&g_rc_diagram, pt) && g_spModel != nullptr)
+    {
+        list_view_clear_selection(g_lv_packets_handle);
+
+        // Select item
+        auto const x_offset { x - g_rc_diagram.left };
+        auto const index { ::MulDiv(x_offset, static_cast<int>(g_spModel->packet_count()), ::width(g_rc_diagram)) };
+        ListView_SetItemState(g_lv_packets_handle, index, LVIS_SELECTED, LVIS_SELECTED);
+
+        // Make sure it's in view
+        ListView_EnsureVisible(g_lv_packets_handle, index, FALSE);
+    }
+}
+
+
 static void OnGetMinMaxInfo(HWND /*hwnd*/, LPMINMAXINFO lpMinMaxInfo)
 {
     lpMinMaxInfo->ptMinTrackSize = POINT { 1200, 800 };
@@ -603,6 +629,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 
     case WM_COMMAND:
         HANDLE_WM_COMMAND(hwndDlg, wParam, lParam, &::OnCommand);
+        return TRUE;
+
+    case WM_LBUTTONDOWN:
+        HANDLE_WM_LBUTTONDOWN(hwndDlg, wParam, lParam, &::OnLButtonDown);
         return TRUE;
 
     case WM_GETMINMAXINFO:
