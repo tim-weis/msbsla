@@ -426,7 +426,7 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
 // TEMP --- VVV
 // My local sensor log capture store; needs to be replaced with a folder selection dialog
 auto const& log_location {
-    L"C:\\Users\\Tim\\SourceCode\\VSTS\\Git\\WindowsUniversal\\recommissioned\\doc\\SensorLogCaptures\\"
+    L"C:\\Users\\Tim\\source\\VSTS\\WindowsUniversal\\recommissioned\\doc\\SensorLogCaptures\\"
 };
 // TEMP --- AAA
 
