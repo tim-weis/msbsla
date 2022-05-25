@@ -384,7 +384,7 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
     {
         // Find min/max values
         auto [min_it, max_it] { ::std::minmax_element(begin(indexes), end(indexes),
-                                                      [& m = m, offset](auto const lhs, auto const rhs) {
+                                                      [&m = m, offset](auto const lhs, auto const rhs) {
                                                           auto const val_lhs { m.packet(lhs).value<T>(offset) };
                                                           auto const val_rhs { m.packet(rhs).value<T>(offset) };
 
@@ -679,8 +679,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 break;
 
                 case packet_col::payload: {
-                    auto payload_str { ::to_hex_string(g_spModel->packet(item_index).data() + 2,
-                                                       g_spModel->packet(item_index).payload_size()) };
+                    auto payload_str { ::to_hex_string(
+                        { g_spModel->packet(item_index).data() + 2, g_spModel->packet(item_index).payload_size() }) };
                     // Truncate payload if it exceeds available space.
                     if (payload_str.size() >= nmlvdi.item.cchTextMax)
                     {
@@ -755,7 +755,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 }
 
                 case 1: {
-                    auto const text { format_timestamp(info.timestamp) };
+                    auto const text { to_iso8601(info.timestamp) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, text.c_str(), text.length());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                     break;

@@ -40,17 +40,20 @@ struct data_proxy
     data_proxy(unsigned char const* begin, unsigned char const* end) : begin_ { begin }, end_ { end } {}
     data_proxy(data_proxy const&) = default;
 
-    constexpr auto header_size() const noexcept { return sizeof(unsigned char) + sizeof(unsigned char); }
-    auto payload_size() const noexcept { return ::std::distance(begin_, end_) - header_size(); }
-    auto data() const noexcept { return begin_; };
+    [[nodiscard]] static consteval size_t header_size() noexcept
+    {
+        return sizeof(unsigned char) + sizeof(unsigned char);
+    }
+    [[nodiscard]] auto payload_size() const noexcept { return ::std::distance(begin_, end_) - header_size(); }
+    [[nodiscard]] auto data() const noexcept { return begin_; };
     // Return typed value at specific offset. The offset is relative to the payload.
     template <typename T>
-    std::add_const_t<T> value(size_t const offset) const noexcept
+    [[nodiscard]] std::add_const_t<T> value(size_t const offset) const noexcept
     {
         assert(offset + sizeof(T) <= payload_size());
-        return *reinterpret_cast<std::add_const_t<T>*>(begin_ + /*header_size()*/ 2 + offset);
+        return *reinterpret_cast<std::add_const_t<T>*>(begin_ + header_size() + offset);
     }
-    auto type() const noexcept { return *begin_; }
+    [[nodiscard]] auto type() const noexcept { return *begin_; }
 
 private:
     unsigned char const* begin_;
@@ -94,7 +97,7 @@ struct raw_data
         }
     }
 
-    auto const& directory() const noexcept { return directory_; }
+    [[nodiscard]] auto const& directory() const noexcept { return directory_; }
 
 private:
     // std::wstring path_name_;
@@ -239,7 +242,7 @@ struct model
     }
 
     // Returns packet at index applying the current sort map
-    auto const& packet(size_t const index) const noexcept
+    [[nodiscard]] auto const& packet(size_t const index) const noexcept
     {
         assert(index < sort_map_.size());
         auto const mapped_index { sort_map_[index] };
@@ -248,17 +251,17 @@ struct model
     }
 
     // Returns the mapped index (after filtering and sorting is applied)
-    auto packet_index(size_t const index) const noexcept
+    [[nodiscard]] auto packet_index(size_t const index) const noexcept
     {
         assert(index < sort_map_.size());
         return sort_map_[index];
     }
 
-    auto packet_count() const noexcept { return sort_map_.size(); }
+    [[nodiscard]] auto packet_count() const noexcept { return sort_map_.size(); }
 
     // auto& data() noexcept { return data_; }
     // auto const& data() const noexcept { return data_; }
-    auto const& packet_descriptions() const noexcept { return packet_descriptions_; }
+    [[nodiscard]] auto const& packet_descriptions() const noexcept { return packet_descriptions_; }
 
     // Apply sorting
     // Defaults to natural sorting (sequential order as in the raw binary data)

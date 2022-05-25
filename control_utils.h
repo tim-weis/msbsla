@@ -10,7 +10,7 @@
 #include <string>
 
 
-inline ::std::wstring wnd_class_name(HWND const hwnd)
+[[nodiscard]] inline ::std::wstring wnd_class_name(HWND const hwnd)
 {
     wchar_t buffer[128] {};
     auto const chars_written { ::RealGetWindowClassW(hwnd, buffer, ARRAYSIZE(buffer)) };
@@ -19,7 +19,7 @@ inline ::std::wstring wnd_class_name(HWND const hwnd)
 }
 
 
-inline bool is_list_view(HWND const hwnd) { return wnd_class_name(hwnd) == WC_LISTVIEWW; }
+[[nodiscard]] inline bool is_list_view(HWND const hwnd) { return wnd_class_name(hwnd) == WC_LISTVIEWW; }
 
 
 inline void list_view_clear_selection(HWND const list_view)
