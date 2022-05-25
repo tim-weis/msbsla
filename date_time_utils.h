@@ -35,13 +35,21 @@
 }
 
 
-[[nodiscard]] constexpr inline auto to_uint(::FILETIME const ft) noexcept
+[[nodiscard]] constexpr inline auto to_filetime(uint64_t timestamp) noexcept
+{
+    FILETIME const ft { .dwLowDateTime = static_cast<DWORD>(timestamp),
+                        .dwHighDateTime = static_cast<DWORD>(timestamp >> 32) };
+    return ft;
+}
+
+
+[[nodiscard]] constexpr inline auto to_uint(::FILETIME ft) noexcept
 {
     return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | static_cast<uint64_t>(ft.dwLowDateTime);
 }
 
 
-[[nodiscard]] inline auto to_systemtime(::FILETIME const ft)
+[[nodiscard]] inline auto to_systemtime(::FILETIME ft)
 {
     ::SYSTEMTIME st {};
     THROW_IF_WIN32_BOOL_FALSE(::FileTimeToSystemTime(&ft, &st));

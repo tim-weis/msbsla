@@ -94,22 +94,25 @@ static void populate_log_list(wchar_t const* log_dir, HWND list_view)
     auto item_index { 0 };
 
     auto it { fs::directory_iterator(log_dir) };
-    for (auto file_path : it)
+    for (auto&& entry : it)
     {
-        if (file_path.path().extension() == L".bin")
+        if (entry.is_regular_file())
         {
-            auto filename { file_path.path().filename() };
+            ::FILETIME ft {};
+            if (is_sensor_log(entry.path().wstring(), &ft))
+            {
+                auto filename { entry.path().filename() };
 
-            ::LVITEMW lvi {};
-            lvi.mask = LVIF_TEXT | LVIF_PARAM;
-            lvi.iItem = item_index;
-            lvi.pszText = LPSTR_TEXTCALLBACK;
-            lvi.lParam
-                = reinterpret_cast<LPARAM>(new log_info { file_path, get_start_timestamp(file_path.path().c_str()) });
+                ::LVITEMW lvi {};
+                lvi.mask = LVIF_TEXT | LVIF_PARAM;
+                lvi.iItem = item_index;
+                lvi.pszText = LPSTR_TEXTCALLBACK;
+                lvi.lParam = reinterpret_cast<LPARAM>(new log_info { entry, ft });
 
-            ListView_InsertItem(list_view, &lvi);
+                ListView_InsertItem(list_view, &lvi);
 
-            ++item_index;
+                ++item_index;
+            }
         }
     }
 }
@@ -405,8 +408,8 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
             auto y { rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range) };
             ::MoveToEx(hdc, x, y, nullptr);
 
-            auto const pen { ::CreatePen(PS_SOLID, 0, color) };
-            auto const prev_pen { SelectPen(hdc, pen) };
+            auto const prev_pen { SelectPen(hdc, ::GetStockObject(DC_PEN)) };
+            ::SetDCPenColor(hdc, color);
 
             for (size_t i { 1 }; i < indexes.size(); ++i)
             {
@@ -417,18 +420,9 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
             }
 
             SelectPen(hdc, prev_pen);
-            ::DeleteObject(pen);
         }
     }
 }
-
-
-// TEMP --- VVV
-// My local sensor log capture store; needs to be replaced with a folder selection dialog
-auto const& log_location {
-    L"C:\\Users\\Tim\\source\\VSTS\\WindowsUniversal\\recommissioned\\doc\\SensorLogCaptures\\"
-};
-// TEMP --- AAA
 
 
 #pragma region Message handlers
@@ -447,8 +441,13 @@ BOOL OnInitDialog(HWND hwnd, HWND /*hwndFocus*/, LPARAM /*lParam*/)
     g_lv_packets_handle = ::GetDlgItem(hwnd, IDC_LISTVIEW_PACKET_LIST);
     assert(g_lv_packets_handle != nullptr);
 
-    // TODO: Query user for log folder
-    populate_log_list(log_location, g_lv_logs_handle);
+    // Populate sensor log list in case a directory is passed on the command
+    // line (this is mainly intended to make debugging less cumbersome, as
+    // opposed to a well designed command line interface).
+    if (__argc >= 2)
+    {
+        populate_log_list(__wargv[1], g_lv_logs_handle);
+    }
 
     // Set column(s) for logs list view
     LV_COLUMNW lvc {};
