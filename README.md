@@ -10,7 +10,7 @@ The primary goal of this software is to reverse the data format, allowing client
 
 The main UI consists of the following parts:
 
-![Main UI](/assets/images/2022-05-28 - msbsla screenshot.png).
+![Main UI](/assets/images/screenshot_ui.png).
 
 The top part shows the folder contents with the raw binary sensor log files, alongside buttons to set a different folder and load a sensor log file.
 
