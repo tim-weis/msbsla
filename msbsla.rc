@@ -77,11 +77,11 @@ EXSTYLE WS_EX_CONTROLPARENT
 CAPTION "MS Band Sensor Log Analyzer"
 FONT 9, "Segoe UI", 400, 0, 0x0
 BEGIN
-    CONTROL         "",IDC_LISTVIEW_LOGS,"SysListView32",LVS_REPORT | LVS_ALIGNLEFT | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,7,26,337,191
+    CONTROL         "",IDC_LISTVIEW_LOGS,"SysListView32",LVS_REPORT | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_BORDER | WS_TABSTOP,7,26,337,191
     LTEXT           "Sensor log files:",IDC_STATIC_SENSOR_LOG_LIST_LABEL,7,7,55,8
     PUSHBUTTON      "Browse...",IDC_BUTTON_BROWSE_FOR_LOGS,358,206,89,16
     PUSHBUTTON      "Load",IDC_BUTTON_LOAD_LOG,358,180,89,16
-    CONTROL         "",IDC_LISTVIEW_PACKET_LIST,"SysListView32",LVS_REPORT | LVS_ALIGNLEFT | LVS_OWNERDATA | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,7,236,577,92
+    CONTROL         "",IDC_LISTVIEW_PACKET_LIST,"SysListView32",LVS_REPORT | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | LVS_OWNERDATA | WS_BORDER | WS_TABSTOP,7,236,577,92
 END
 
 
@@ -131,6 +131,45 @@ BEGIN
 END
 
 #endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName", ""
+            VALUE "FileDescription", "msbsla.exe"
+            VALUE "FileVersion", "0.1.0.0"
+            VALUE "InternalName", "msbsla.exe"
+            VALUE "LegalCopyright", "Copyright (C) 2020, 2022 Tim Weis"
+            VALUE "OriginalFilename", "msbsla.exe"
+            VALUE "ProductName", "Microsoft Band Sensor Log Analyzer"
+            VALUE "ProductVersion", "0.1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
 
 
 /////////////////////////////////////////////////////////////////////////////
