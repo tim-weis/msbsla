@@ -1,0 +1,12 @@
+root = true
+
+[*]
+charset      = utf-8
+end_of_line  = crlf
+indent_style = space
+indent_size  = 4
+
+[*.{h,hpp,cpp}]
+trim_trailing_whitespace = true
+insert_final_newline     = true
+guidelines = 80 1px dotted ff666666, 120 1px dotted ffcccccc
