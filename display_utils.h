@@ -1,65 +1,83 @@
 #pragma once
 
+#include "date_time_utils.h"
 #include "model.h"
 
 #include <Windows.h>
 
 #include <cassert>
-#include <iomanip>
+#include <format>
 #include <optional>
-#include <sstream>
+#include <span>
 #include <string>
 
 
-namespace
+//! \brief Creates a human readable string representation for a timestamp value
+//!        according to [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601).
+//!
+//! \param[in] timestamp The timestamp value to format. This value is assumed to
+//!                      be in UTC.
+//!
+//! \return The string representation of the given timestamp value down to
+//!         millisecond precision.
+//!
+[[nodiscard]] inline ::std::wstring to_iso8601(::FILETIME const& timestamp)
 {
+    auto const st { to_systemtime(timestamp) };
 
-wchar_t to_hex_char(unsigned char value) { return value > 9u ? value - 10u + L'A' : value + L'0'; }
-
-} // namespace
-
-
-inline ::std::wstring format_timestamp(::FILETIME const& timestamp)
-{
-    ::SYSTEMTIME st {};
-    ::FileTimeToSystemTime(&timestamp, &st);
-
-    ::std::wostringstream oss {};
-
-    oss << std::setfill(L'0') << std::setw(4) << st.wYear << L"-" << std::setfill(L'0') << std::setw(2) << st.wMonth
-        << L"-" << std::setfill(L'0') << std::setw(2) << st.wDay << L" " << std::setfill(L'0') << std::setw(2)
-        << st.wHour << L":" << std::setfill(L'0') << std::setw(2) << st.wMinute << L":" << std::setfill(L'0')
-        << std::setw(2) << st.wSecond << L"." << std::setfill(L'0') << std::setw(3) << st.wMilliseconds;
-
-    return oss.str();
+    return ::std::format(L"{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}.{:03d}Z", st.wYear, st.wMonth, st.wDay, st.wHour,
+                         st.wMinute, st.wSecond, st.wMilliseconds);
 }
 
-inline ::std::wstring to_hex_string(unsigned char const data)
+//! \brief Converts a byte value into its hexadecimal string representation.
+//!
+//! \param[in] value The byte value to convert.
+//!
+//! \return The hexadecimal string representation of the byte value.
+//!
+//! \remark This function uses uppercase hex digits. The result is zero-padded
+//!         in case the byte value is less than 16. It isn't otherwise prefixed
+//!         (e.g. with `0x`), and the returned string is guaranteed to be of
+//!         length 2.
+//!
+[[nodiscard]] inline constexpr ::std::wstring to_hex_string(unsigned char const value)
 {
-    ::std::wstring result(2, L'\0');
+    constexpr auto to_hex_digit = [](unsigned char const value) noexcept -> wchar_t {
+        constexpr auto& digits = L"0123456789ABCDEF";
+        return digits[value & 0xF];
+    };
 
-    result[0] = ::to_hex_char(data >> 4);
-    result[1] = ::to_hex_char(data & 0xF);
-
-    return result;
+    return { to_hex_digit(value >> 4), to_hex_digit(value & 0xF) };
 }
 
-inline ::std::wstring to_hex_string(unsigned char const* data, size_t length)
+//! \brief Converts a byte buffer into its hexadecimal string representation.
+//!
+//! \param[in] data A view into the byte buffer to convert. This span may be
+//!                 empty.
+//!
+//! \return If the input designates an emtpy span, this function returns an
+//!         empty string. Otherwise, this function returns a string where each
+//!         byte is represented by two hexadecimal digits. Individual bytes are
+//!         delimited by a space character.
+//!
+[[nodiscard]] inline constexpr ::std::wstring to_hex_string(::std::span<unsigned char const> const data)
 {
-    assert(length > 0);
+    ::std::wstring result {};
 
-    // Fill result with space characters
-    ::std::wstring result(length * 3 - 1, L' ');
-
-    size_t src_index { 0 };
-    while (src_index < length)
+    if (data.size() > 0)
     {
-        auto const value { data[src_index] };
-        auto dest_index { src_index * 3 };
-        result[dest_index] = ::to_hex_char(value >> 4);
-        result[dest_index + 1] = ::to_hex_char(value & 0xF);
-
-        ++src_index;
+        // Reserve enough room up front; 2 hex digits per value plus a delimiter
+        // (except for the final one)
+        result.reserve(data.size() * 3 - 1);
+        for (auto const value : data)
+        {
+            // Append delimiter unless this is the first value
+            if (!result.empty())
+            {
+                result.append(L" ");
+            }
+            result.append(to_hex_string(value));
+        }
     }
 
     return result;
@@ -83,7 +101,7 @@ inline ::std::optional<::std::wstring> details_from_packet(::data_proxy const& p
                 assert(el.size == sizeof(::FILETIME));
                 auto const& ft { *reinterpret_cast<::FILETIME const*>(packet.data() + packet.header_size()
                                                                       + el.offset) };
-                ret += ::format_timestamp(ft);
+                ret += ::to_iso8601(ft);
             }
             break;
 

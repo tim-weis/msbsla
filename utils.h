@@ -5,10 +5,24 @@
 #include <wil/result.h>
 
 
-inline auto width(RECT const& r) { return r.right - r.left; }
+//! \brief Calculates the width of a rectangle.
+//!
+//! \param r The rectangle to calculate the width for.
+//!
+//! \return The width of the rectangle. This value can be negative if the
+//!         rectangle isn't normalized.
+//!
+[[nodiscard]] constexpr inline auto width(RECT const& r) noexcept { return r.right - r.left; }
 
 
-inline auto height(RECT const& r) { return r.bottom - r.top; }
+//! \brief Calculates the height of a rectangle.
+//!
+//! \param r The rectangle to calculate the height for.
+//!
+//! \return The height of the rectangle. This value can be negative if the
+//!         rectangle isn't normalized.
+//!
+[[nodiscard]] constexpr inline auto height(RECT const& r) noexcept { return r.bottom - r.top; }
 
 
 inline void modify_style(HWND const wnd, DWORD style_add, DWORD style_remove = 0x0)

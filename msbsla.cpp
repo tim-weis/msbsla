@@ -8,9 +8,11 @@
 #include "model.h"
 #include "utils.h"
 
+#include <wil/com.h>
 #include <wil/resource.h>
 
 #include <CommCtrl.h>
+#include <ShObjIdl_core.h>
 #include <Windows.h>
 #include <windowsx.h>
 
@@ -52,6 +54,7 @@ constexpr auto k_diagram_height { 120 };
 static HWND g_main_dlg_handle { nullptr };
 static HWND g_label_logs_handle { nullptr };
 static HWND g_lv_logs_handle { nullptr };
+static HWND g_button_browse_handle { nullptr };
 static HWND g_button_load_handle { nullptr };
 static HWND g_lv_packets_handle { nullptr };
 
@@ -68,6 +71,61 @@ struct log_info
 
 
 // Local functions
+
+//! \brief Opens a folder picker dialog and returns the user's choice.
+//!
+//! \param[in,opt] owner The owner window for the modal folder picker dialog. If
+//!                      this is a `nullptr` the dialog is displayed without an
+//!                      owner.
+//!
+//! \return Returns an `optional` containing the fully qualified pathname to the
+//!         selected folder. If part of the operation fails, or the user cancels
+//!         the dialog, this function returns `nullopt`.
+//!
+static std::optional<std::wstring> pick_folder(HWND owner) noexcept
+{
+    auto const picker { wil::CoCreateInstanceNoThrow<IFileDialog>(CLSID_FileOpenDialog) };
+    if (!picker)
+    {
+        return {};
+    }
+
+    FILEOPENDIALOGOPTIONS options {};
+    if (FAILED(picker->GetOptions(&options)))
+    {
+        return {};
+    }
+
+    options |= FOS_PICKFOLDERS;
+    if (FAILED(picker->SetOptions(options)))
+    {
+        return {};
+    }
+
+    // Returns S_OK on success, ERROR_CANCELLED if dismissed
+    if (picker->Show(owner) != S_OK)
+    {
+        return {};
+    }
+
+    wil::com_ptr_nothrow<IShellItem> result {};
+    if (FAILED(picker->GetResult(&result)))
+    {
+        return {};
+    }
+
+    wchar_t* p {};
+    if (FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &p)))
+    {
+        return {};
+    }
+
+    auto deleter = [](void* p) { ::CoTaskMemFree(p); };
+    std::unique_ptr<wchar_t, decltype(deleter)> auto_cleanup(p, deleter);
+
+    return { p };
+}
+
 static void clear_log_list(HWND list_view)
 {
     assert(is_list_view(list_view));
@@ -78,7 +136,7 @@ static void clear_log_list(HWND list_view)
     {
         LVITEMW lvi {};
         lvi.mask = LVIF_PARAM;
-        lvi.iItem = 0;
+        lvi.iItem = index;
         ListView_GetItem(list_view, &lvi);
         auto p { reinterpret_cast<log_info*>(lvi.lParam) };
         delete p;
@@ -94,22 +152,25 @@ static void populate_log_list(wchar_t const* log_dir, HWND list_view)
     auto item_index { 0 };
 
     auto it { fs::directory_iterator(log_dir) };
-    for (auto file_path : it)
+    for (auto&& entry : it)
     {
-        if (file_path.path().extension() == L".bin")
+        if (entry.is_regular_file())
         {
-            auto filename { file_path.path().filename() };
+            ::FILETIME ft {};
+            if (is_sensor_log(entry.path().wstring(), &ft))
+            {
+                auto filename { entry.path().filename() };
 
-            ::LVITEMW lvi {};
-            lvi.mask = LVIF_TEXT | LVIF_PARAM;
-            lvi.iItem = item_index;
-            lvi.pszText = LPSTR_TEXTCALLBACK;
-            lvi.lParam
-                = reinterpret_cast<LPARAM>(new log_info { file_path, get_start_timestamp(file_path.path().c_str()) });
+                ::LVITEMW lvi {};
+                lvi.mask = LVIF_TEXT | LVIF_PARAM;
+                lvi.iItem = item_index;
+                lvi.pszText = LPSTR_TEXTCALLBACK;
+                lvi.lParam = reinterpret_cast<LPARAM>(new log_info { entry, ft });
 
-            ListView_InsertItem(list_view, &lvi);
+                ListView_InsertItem(list_view, &lvi);
 
-            ++item_index;
+                ++item_index;
+            }
         }
     }
 }
@@ -207,6 +268,12 @@ static void set_header_sorting(HWND const header, size_t const col_index = 0,
 // This is for convenience, so the LVN_* notification handler can simply return this function's return value.
 static bool handle_sorting(HWND const header, size_t const col_index)
 {
+    // Early out if there isn't any document loaded
+    if (!g_spModel)
+    {
+        return false;
+    }
+
     if (static_cast<packet_col const>(col_index) >= packet_col::payload)
     {
         // Do not sort by payload column
@@ -318,10 +385,25 @@ static void arrange_controls(HWND dlg_handle, int32_t width_client, int32_t heig
                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
     // Position "Load" button
+    // Bottom: Aligned with log list bottom
+    // Left: `margin_y` to the right of the log list
+    // Width: from resource script
+    // Height: from resource script
     auto rc_load { ::window_rect_in_client_coords(dlg_handle, g_button_load_handle) };
     ::OffsetRect(&rc_load, rc_logs.right + margin_y - rc_load.left, rc_logs.bottom - rc_load.bottom);
-    ::SetWindowPos(g_button_load_handle, nullptr, rc_load.left, rc_load.top, ::width(rc_load), ::height(rc_load),
-                   SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+    ::SetWindowPos(g_button_load_handle, nullptr, rc_load.left, rc_load.top, 0, 0,
+                   SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+
+    // Position "Browse ..." button
+    // Bottom: `space_y_related` above load button
+    // Left: `margin_y` to the right of the log list
+    // Width: from resource script
+    // Height: from resource script
+    auto rc_browse { ::window_rect_in_client_coords(dlg_handle, g_button_browse_handle) };
+    ::OffsetRect(&rc_browse, rc_logs.right + margin_y - rc_browse.left,
+                 rc_load.top - rc_browse.bottom - space_y_related);
+    ::SetWindowPos(g_button_browse_handle, nullptr, rc_browse.left, rc_browse.top, 0, 0,
+                   SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOOWNERZORDER | SWP_NOZORDER);
 
     // Position packet list
     // Top: log_list's bottom + space_y_unrelated
@@ -384,7 +466,7 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
     {
         // Find min/max values
         auto [min_it, max_it] { ::std::minmax_element(begin(indexes), end(indexes),
-                                                      [& m = m, offset](auto const lhs, auto const rhs) {
+                                                      [&m = m, offset](auto const lhs, auto const rhs) {
                                                           auto const val_lhs { m.packet(lhs).value<T>(offset) };
                                                           auto const val_rhs { m.packet(rhs).value<T>(offset) };
 
@@ -405,8 +487,8 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
             auto y { rect.bottom - 1 - ::MulDiv(val - min_val, h, value_range) };
             ::MoveToEx(hdc, x, y, nullptr);
 
-            auto const pen { ::CreatePen(PS_SOLID, 0, color) };
-            auto const prev_pen { SelectPen(hdc, pen) };
+            auto const prev_pen { SelectPen(hdc, ::GetStockObject(DC_PEN)) };
+            ::SetDCPenColor(hdc, color);
 
             for (size_t i { 1 }; i < indexes.size(); ++i)
             {
@@ -417,18 +499,9 @@ void render_graph(HDC const hdc, RECT const& rect, COLORREF const color, model c
             }
 
             SelectPen(hdc, prev_pen);
-            ::DeleteObject(pen);
         }
     }
 }
-
-
-// TEMP --- VVV
-// My local sensor log capture store; needs to be replaced with a folder selection dialog
-auto const& log_location {
-    L"C:\\Users\\Tim\\source\\VSTS\\WindowsUniversal\\recommissioned\\doc\\SensorLogCaptures\\"
-};
-// TEMP --- AAA
 
 
 #pragma region Message handlers
@@ -442,13 +515,20 @@ BOOL OnInitDialog(HWND hwnd, HWND /*hwndFocus*/, LPARAM /*lParam*/)
     assert(g_label_logs_handle != nullptr);
     g_lv_logs_handle = ::GetDlgItem(hwnd, IDC_LISTVIEW_LOGS);
     assert(g_lv_logs_handle != nullptr);
+    g_button_browse_handle = ::GetDlgItem(hwnd, IDC_BUTTON_BROWSE_FOR_LOGS);
+    assert(g_button_browse_handle != nullptr);
     g_button_load_handle = ::GetDlgItem(hwnd, IDC_BUTTON_LOAD_LOG);
     assert(g_button_load_handle != nullptr);
     g_lv_packets_handle = ::GetDlgItem(hwnd, IDC_LISTVIEW_PACKET_LIST);
     assert(g_lv_packets_handle != nullptr);
 
-    // TODO: Query user for log folder
-    populate_log_list(log_location, g_lv_logs_handle);
+    // Populate sensor log list in case a directory is passed on the command
+    // line (this is mainly intended to make debugging less cumbersome, as
+    // opposed to a well designed command line interface).
+    if (__argc >= 2)
+    {
+        populate_log_list(__wargv[1], g_lv_logs_handle);
+    }
 
     // Set column(s) for logs list view
     LV_COLUMNW lvc {};
@@ -541,43 +621,68 @@ static void OnPaint(HWND hwnd)
 }
 
 
-static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT codeNotify)
+static void OnCommand(HWND /*hwnd*/, int id, HWND /*hwndCtl*/, UINT /*codeNotify*/)
 {
     switch (id)
     {
-    case IDC_BUTTON_LOAD_LOG:
-        switch (codeNotify)
+    case IDC_BUTTON_LOAD_LOG: {
+        auto const sel_index { ListView_GetNextItem(g_lv_logs_handle, -1, LVNI_SELECTED) };
+        if (sel_index >= 0)
         {
-        case BN_CLICKED: {
-            auto const sel_index { ListView_GetNextItem(g_lv_logs_handle, -1, LVNI_SELECTED) };
-            if (sel_index >= 0)
-            {
-                LVITEMW lvi {};
-                lvi.mask = LVIF_PARAM;
-                lvi.iItem = sel_index;
-                ListView_GetItem(g_lv_logs_handle, &lvi);
-                auto const& info { *reinterpret_cast<log_info const*>(lvi.lParam) };
+            LVITEMW lvi {};
+            lvi.mask = LVIF_PARAM;
+            lvi.iItem = sel_index;
+            ListView_GetItem(g_lv_logs_handle, &lvi);
+            auto const& info { *reinterpret_cast<log_info const*>(lvi.lParam) };
 
-                g_spModel.reset(new model(info.file_path.path().c_str()));
-                auto const packet_count { g_spModel->packet_count() };
+            g_spModel.reset(new model(info.file_path.path().c_str()));
+            auto const packet_count { g_spModel->packet_count() };
 
-                // Reset sorting indicators
-                ::set_header_sorting(ListView_GetHeader(g_lv_packets_handle));
-                // Set virtual list view size
-                ::SendMessageW(g_lv_packets_handle, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count), 0x0);
-                // Adjust packets list column widths. If we don't do this after setting the items count, a
-                // potentially appearing vertical scrollbar will not be accounted for.
-                set_packets_list_column_widths(g_lv_packets_handle);
+            // Reset sorting indicators
+            ::set_header_sorting(ListView_GetHeader(g_lv_packets_handle));
+            // Set virtual list view size
+            ::SendMessageW(g_lv_packets_handle, LVM_SETITEMCOUNT, static_cast<WPARAM>(packet_count), 0x0);
+            // Adjust packets list column widths. If we don't do this after
+            // setting the items count, a potentially appearing vertical
+            // scrollbar will not be accounted for.
+            set_packets_list_column_widths(g_lv_packets_handle);
 
-                // Redraw diagram
-                ::InvalidateRect(g_main_dlg_handle, &g_rc_diagram, FALSE);
-            }
-            break;
+            // Redraw diagram
+            ::InvalidateRect(g_main_dlg_handle, &g_rc_diagram, FALSE);
         }
+    }
+    break;
 
-        default:
-            break;
+    case IDC_BUTTON_BROWSE_FOR_LOGS: {
+        auto folder { pick_folder(g_main_dlg_handle) };
+        if (folder.has_value())
+        {
+            auto&& folder_path { folder.value() };
+
+            // Reset virtual list view size first, so we can safely reset the
+            // loaded document (`g_spModel`)
+            ::SendMessageW(g_lv_packets_handle, LVM_SETITEMCOUNT, 0, 0);
+            // Reset sorting indicators for good measure, too
+            ::set_header_sorting(ListView_GetHeader(g_lv_packets_handle));
+
+            // At this point no one is holding any references into the document
+            // anymore so we can delete it
+            g_spModel.reset(nullptr);
+
+            // Clear the sensor log list (its items own resources)
+            clear_log_list(g_lv_logs_handle);
+
+            // Clear diagram area
+            ::InvalidateRect(g_main_dlg_handle, &g_rc_diagram, FALSE);
+
+            // Everything is reset now, so finally populate the sensor log list
+            populate_log_list(folder_path.c_str(), g_lv_logs_handle);
         }
+    }
+    break;
+
+    default:
+        break;
     }
 }
 
@@ -679,8 +784,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 break;
 
                 case packet_col::payload: {
-                    auto payload_str { ::to_hex_string(g_spModel->packet(item_index).data() + 2,
-                                                       g_spModel->packet(item_index).payload_size()) };
+                    auto payload_str { ::to_hex_string(
+                        { g_spModel->packet(item_index).data() + 2, g_spModel->packet(item_index).payload_size() }) };
                     // Truncate payload if it exceeds available space.
                     if (payload_str.size() >= nmlvdi.item.cchTextMax)
                     {
@@ -755,7 +860,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
                 }
 
                 case 1: {
-                    auto const text { format_timestamp(info.timestamp) };
+                    auto const text { to_iso8601(info.timestamp) };
                     ::wcsncpy_s(nmlvdi.item.pszText, nmlvdi.item.cchTextMax, text.c_str(), text.length());
                     nmlvdi.item.mask |= LVIF_DI_SETITEM;
                     break;
@@ -786,6 +891,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT message, WPARAM wParam, LPARAM l
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE /*hPrevInstance*/, _In_ LPWSTR /*lpCmdLine*/,
                       _In_ int /*nCmdShow*/)
 {
+    // Initialize COM; `cleanup` uninitializes a successful initialization when
+    // it goes out of scope
+    auto cleanup = wil::CoInitializeEx(COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
     INITCOMMONCONTROLSEX icc { static_cast<DWORD>(sizeof(icc)),
                                ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES | ICC_DATE_CLASSES };
     THROW_IF_WIN32_BOOL_FALSE(::InitCommonControlsEx(&icc));
