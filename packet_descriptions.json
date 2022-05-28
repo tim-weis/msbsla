@@ -12,7 +12,7 @@
             ]
         },
         {
-            "type": "0x0d",
+            "type": "0x0D",
             "elements": [
                 {
                     "offset": 0,
@@ -32,7 +32,7 @@
             ]
         },
         {
-            "type": "0x0f",
+            "type": "0x0F",
             "name": "[SEQUENCE_ID]",
             "elements": [
                 {
@@ -87,7 +87,7 @@
             ]
         },
         {
-            "type": "0xe0",
+            "type": "0xE0",
             "elements": [
                 {
                     "offset": 0,
@@ -107,7 +107,27 @@
             ]
         },
         {
-            "type": "0xe1",
+            "type": "0xE1",
+            "elements": [
+                {
+                    "offset": 1,
+                    "length": 8,
+                    "display_type": "file_time"
+                }
+            ]
+        },
+        {
+            "type": "0xE2",
+            "elements": [
+                {
+                    "offset": 1,
+                    "length": 8,
+                    "display_type": "file_time"
+                }
+            ]
+        },
+        {
+            "type": "0xE6",
             "elements": [
                 {
                     "offset": 1,
